@@ -11,6 +11,7 @@ sys.path.append(PROJECT_ROOT)
 from config import llm
 from dotenv import load_dotenv
 from tools.job_scrapper_tool import JobScraperService
+from tools.multi_platform_job_scraper import MultiPlatformJobScraper
 import asyncio
 import os
 
@@ -23,8 +24,9 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 class MarketAnalysisAgent:
-    def __init__(self):
-        self.scraper = JobScraperService()
+    def __init__(self, scraper=None, multi_scraper=None):
+        self.scraper = scraper or JobScraperService()
+        self.multi_scraper = multi_scraper or MultiPlatformJobScraper()
         self.llm = llm
 
     # The scraper always fetches 10 (the actor's schema minimum) and the round-trip costs the
@@ -91,7 +93,9 @@ class MarketAnalysisAgent:
         job = group['job']
         skills = list(group['skills'])
         reposts = group['postings']
-        header = f"Employer {index} of {total}"
+        platform = job.get('platform')
+        platform_info = f" [Source: {platform}]" if platform else ""
+        header = f"Employer {index} of {total}{platform_info}"
         if reposts > 1:
             header += (
                 f" — this employer posted {reposts} variants of the same role in the sample"
@@ -230,32 +234,49 @@ class MarketAnalysisAgent:
             logger.exception("Market: job-title extraction failed, using raw query")
             return query
 
-    async def run_analysis(self, search_query: str, location: str):
-        # 1. Initialize Scraper
-        await self.scraper.initialize()
+    async def fetch_multi_platform_jobs(self, search_query: str, location: str = "United States") -> list:
+        """Aggregates postings from Apify LinkedIn AND open platforms (Indeed, Naukri, Glassdoor, open web)."""
+        combined_jobs = []
 
-        # 2. Perform Search
-        dataset_id = await self.scraper.search_jobs(search_query, location)
+        # 1. Apify LinkedIn (if token is available)
+        if getattr(self.scraper, "token", None):
+            try:
+                await self.scraper.initialize()
+                dataset_id = await self.scraper.search_jobs(search_query, location)
+                if dataset_id:
+                    apify_jobs = await self.scraper.fetch_job_results(dataset_id)
+                    if apify_jobs:
+                        for j in apify_jobs:
+                            j.setdefault("platform", "LinkedIn")
+                        combined_jobs.extend(apify_jobs)
+            except Exception as e:
+                logger.warning("Market: Apify LinkedIn fetch failed (%s); continuing with open platforms", e)
+
+        # 2. Multi-Platform open JDs (Indeed, Naukri, Glassdoor, Google search / open web boards)
+        if self.multi_scraper:
+            try:
+                open_jobs = await self.multi_scraper.fetch_open_job_postings(search_query, max_total=8)
+                if open_jobs:
+                    combined_jobs.extend(open_jobs)
+            except Exception as e:
+                logger.warning("Market: open multi-platform scraper error (%s)", e)
+
+        return combined_jobs[: self.MAX_POSTINGS]
+
+    async def run_analysis(self, search_query: str, location: str = "United States"):
+        jobs_list = await self.fetch_multi_platform_jobs(search_query, location)
         
-        if not dataset_id:
-            print("No dataset ID returned. Exiting.")
-            return
+        print(f"Successfully gathered {len(jobs_list)} job postings across platforms")
 
-        print(f"Dataset ID found: {dataset_id}")
-
-        # 3. Fetch Raw Data
-        jobs_list = await self.scraper.fetch_job_results(dataset_id)
-        
-        print(f"Successfully parsed {len(jobs_list)} job postings")
-
-        # 4. Process with LLM (one call across the whole sample)
+        # Process with LLM (one call across the whole sample)
         if jobs_list:
             print(f"\n{'='*60}")
-            print(f"ANALYZING {min(len(jobs_list), self.MAX_POSTINGS)} JOB POSTINGS")
+            print(f"ANALYZING {min(len(jobs_list), self.MAX_POSTINGS)} MULTI-PLATFORM JOB POSTINGS")
             print(f"{'='*60}\n")
 
             for job in jobs_list[: self.MAX_POSTINGS]:
-                print(f"- {job.get('title')} @ {job.get('organization')} ({job.get('url', 'N/A')})")
+                platform = job.get('platform', 'Web')
+                print(f"- [{platform}] {job.get('title')} @ {job.get('organization')} ({job.get('url', 'N/A')})")
             print(f"\n{'='*60}")
             print(f"GENERATING AI SUMMARY...")
             print(f"{'='*60}\n")

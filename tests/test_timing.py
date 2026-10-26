@@ -100,6 +100,8 @@ def test_every_graph_stage_is_timed_including_sync_nodes(monkeypatch):
 def _patch_graph_singleton(monkeypatch, graph):
     monkeypatch.setattr(svc, "_orchestration_graph", graph)
     monkeypatch.setattr(svc, "_run_assessment", lambda sg: None)
+    monkeypatch.setattr(svc, "_get_graph_from_cache", lambda c: None)
+    monkeypatch.setattr(svc, "_save_graph_to_cache", lambda *a: None)
 
 
 def test_start_session_attaches_graph_timing_to_the_session(monkeypatch):

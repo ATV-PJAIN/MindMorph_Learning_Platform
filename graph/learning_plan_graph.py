@@ -33,6 +33,7 @@ from agents.practical.practical_agent import PracticalAgent
 from agents.consensus.consensus_agent import ConsensusAgent
 from agents.reviewer.reviewer_agent import ReviewerAgent
 from tools.github_mcp_client import MCPClientInitialization
+from tools.multi_platform_job_scraper import MultiPlatformJobScraper
 from graph.content_graph import build_content_graph
 from graph.exercise_graph import build_exercise_graph
 from graph.skill_graph_adapt import prune_dangling_edges
@@ -104,17 +105,40 @@ async def _run_market(market_agent: Any, query: str, location: str = "United Sta
     try:
         # Independent: the MCP handshake doesn't need the title, the title doesn't need the client.
         _, job_title = await asyncio.gather(_init(), _title())
-        with span("market.apify.search"):
-            dataset_id = await market_agent.scraper.search_jobs(job_title, location)
-        if not dataset_id:
-            return None
-        with span("market.apify.fetch"):
-            jobs = await market_agent.scraper.fetch_job_results(dataset_id)
+
+        jobs = []
+
+        # 1. Apify LinkedIn
+        dataset_id = None
+        try:
+            with span("market.apify.search"):
+                dataset_id = await market_agent.scraper.search_jobs(job_title, location)
+            if dataset_id:
+                with span("market.apify.fetch"):
+                    apify_jobs = await market_agent.scraper.fetch_job_results(dataset_id)
+                    if apify_jobs and isinstance(apify_jobs, list):
+                        for j in apify_jobs:
+                            j.setdefault("platform", "LinkedIn")
+                        jobs.extend(apify_jobs)
+        except Exception as e:
+            logger.warning("Market: Apify LinkedIn scrape unavailable (%s)", e)
+
+        # 2. Multi-Platform open JDs (Indeed, Naukri, Glassdoor, Google search / open web)
+        multi_scraper = getattr(market_agent, "multi_scraper", None)
+        if isinstance(multi_scraper, MultiPlatformJobScraper):
+            with span("market.multi_platform.fetch"):
+                try:
+                    open_jobs = await multi_scraper.fetch_open_job_postings(job_title, max_total=6)
+                    if open_jobs and isinstance(open_jobs, list):
+                        jobs.extend(open_jobs)
+                except Exception as e:
+                    logger.warning("Market: multi-platform open scrape error (%s)", e)
+
         if not jobs:
             return None
+
         with span("market.llm.summary"):
-            # All the postings, not jobs[0]: the fetch already returns ten and the round-trip costs
-            # the same either way, so summarizing one discarded nine.
+            # Sample across available postings from all platforms
             summary = await market_agent.summarize_job(jobs)
         # No raw posting here. services/learning_service.py ships this dict onto the wire and into
         # the persisted session, and the raw posting carries a named recruiter, their LinkedIn URL
