@@ -1,6 +1,6 @@
 """FastAPI application entrypoint.
 
-Run locally:  conda run -n mindmorph uvicorn api.main:app --reload
+Run locally:  conda run -n mm uvicorn api.main:app --reload
 CORS is opened for the Next.js dev origin (Phase B); tighten ``MINDMORPH_CORS_ORIGINS`` in production.
 """
 import logging
@@ -8,6 +8,9 @@ import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from logging_config import setup_logging
 
@@ -18,10 +21,24 @@ logger = logging.getLogger(__name__)
 # ValueError at startup rather than on the first request.
 import config  # noqa: E402,F401
 
+from api.auth_routes import auth_router  # noqa: E402
+from api.limiter import limiter  # noqa: E402
+from api.middleware.auth_middleware import JWTAuthenticationMiddleware  # noqa: E402
 from api.routes import router  # noqa: E402
 
 app = FastAPI(title="MindMorph API", version="1.0.0")
 
+# Attach slowapi rate limiter state and exception handler
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# 1. Rate Limiting Middleware
+app.add_middleware(SlowAPIMiddleware)
+
+# 2. JWT Authentication & Security Middleware
+app.add_middleware(JWTAuthenticationMiddleware)
+
+# 3. CORS Middleware
 _default_origins = "http://localhost:3000,http://127.0.0.1:3000"
 _origins = os.getenv("MINDMORPH_CORS_ORIGINS", _default_origins).split(",")
 app.add_middleware(
@@ -32,6 +49,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Register routers
+app.include_router(auth_router)
 app.include_router(router)
 
 

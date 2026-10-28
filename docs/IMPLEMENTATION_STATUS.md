@@ -74,9 +74,9 @@ but nothing exports them to a metrics backend (see roadmap below).
 | Frontend | ✅ | **Next.js** (`web/`) is the product; legacy Streamlit `app.py` **retired** (P3 #12). JupyterLite in-browser scratchpad embedded in the lesson. |
 | Application Service | 🟡 | **FastAPI** (`api/`) exposes the loop over HTTP; agents + LangSmith prompt registry exist. Still **no** Celery, gateway, rate limiting. |
 | AI / LLM | 🟡 | **LangGraph** orchestration ✅ (CrewAI is a non-goal — parallel LangGraph nodes cover it). Grounding: live web (DuckDuckGo) **+ opt-in local RAG** (FastEmbed + InMemoryVectorStore, `rag/`) in the Content dual-path. **Groq key-pool → local-Ollama provider chain** ✅ (`config.get_chat_model`, `llm_providers.ProviderChain`) — keys optional; zero-key clones run entirely on local Ollama. **Eval pipeline** 🟡 — offline content-groundedness LLM-judge (`evals/`, `python -m evals.run`). **Prompt Registry**: ✅ via `prompts/prompt_registry_wrapper_method.py` (LangSmith). |
-| Data | 🟡 | **PostgreSQL** ✅ — learning sessions (JSONB, #6) + per-user RAG vectors (**pgvector**, #9). Still **no** Redis/S3/Kafka. |
-| Infrastructure | ⛔ | No K8s/Terraform/Prometheus/CI-CD. |
-| Analytics & Continuous Improvement | ⛔ | No telemetry pipeline, warehouse, or human-review loop. |
+| Data | ✅ | **Hybrid Neo4j + PostgreSQL** — **Neo4j** (canonical graph, Cypher completion engine, checkpointer) + **PostgreSQL** (sessions JSONB, graph_cache, pgvector). Docker Compose includes Postgres, Neo4j, Kafka. |
+| Infrastructure | 🟡 | Docker Compose (docker-compose.yml) runs PostgreSQL (pgvector), Neo4j, and Kafka locally. Still **no** K8s/Terraform/Prometheus/CI-CD. |
+| Analytics & Continuous Improvement | 🟡 | Real-time Kafka event streaming (services/kafka_emitter.py, mindmorph.learning_events) + LangSmith spans (services/telemetry.py) + append-only session events (services/events.py). No data warehouse yet. |
 | LLM Ops & Production | 🟡 | Provider chain (Groq pool → Ollama) ✅ + content-groundedness eval ✅ (`evals/`) + **token/cost accounting** 🟡 (`services/cost.py` `TokenMeter`, priced per model, on the lesson-compose path only — see Cross-cutting) + **latency observability** 🟡 (`services/timing.py` wall-clock spans on the graph / lesson / grade paths — log lines plus a dict on the session payload; no metrics backend or exporter, see Cross-cutting). Still **no** deployment pipeline. |
 | Security & Governance | ⛔ | No auth/RBAC/encryption/PII scrubbing. Only `.env` secrets + `.gitignore`. |
 
@@ -140,7 +140,7 @@ Each item notes the **architecture section** it satisfies and the **code gap** i
    state intact** (cross-process durability proof); DB-gated integration test guards the JSONB path. 108
    tests green. *Deferred:* Redis (JSONB suffices at prototype scale); re-pointing Streamlit at the API
    (#12 retires it); Pinecone. *Satisfies:* §5.2, §5.4. *Closes:* the stateless prototype.
-7. 🟡 **Provider chain (Groq pool → Ollama) + RAG** — _RAG (grounding):_ `rag/` package adds a **local, no-API-key** retrieval
+7. ✅ **Provider chain (Groq pool → Ollama) + RAG** — _RAG (grounding):_ `rag/` package adds a **local, no-API-key** retrieval
    arm. `rag/embeddings.py` wraps **FastEmbed** (ONNX `BAAI/bge-small-en-v1.5`, no torch) as a LangChain
    `Embeddings`; `rag/store.py` `RagStore` over `langchain_core` `InMemoryVectorStore` (chunk + `Source:`
    output mirrors `gather_facts`). `build_content_graph(..., retriever=)` merges KB chunks **+** web search
@@ -171,7 +171,7 @@ Each item notes the **architecture section** it satisfies and the **code gap** i
    Remote multi-vendor HTTP routing (Anthropic/OpenAI/Gemini) still open. *Satisfies (partial):* §5.3, §5.7.
 
 ### P2 — Personalization & ingestion
-8. 🟡 **Onboarding + Dynamic Skill Assessment** — after a path is created, `SkillAssessmentAgent`
+8. ✅ **Onboarding + Dynamic Skill Assessment** — after a path is created, `SkillAssessmentAgent`
    (`agents/assessment/`, structured-output MCQ from the skill graph) generates a diagnostic quiz stored
    in `learning_session["assessment"]`. `POST /sessions/{user}/{session}/assessment` grades it:
    correct answers give those nodes a **head-start (`in_progress`, score `ASSESSMENT_PASS_SCORE`=60), NOT
@@ -200,7 +200,7 @@ Each item notes the **architecture section** it satisfies and the **code gap** i
    OCR for image-only PDFs, ANN index (ivfflat/hnsw) at scale. *Satisfies:* §2, §5.4.
 
 ### P3 — Full product surface
-10. 🟡 **AI Teaching Assistant** — streaming chat tutor (`agents/tutor/`) grounded in the open lesson +
+10. ✅ **AI Teaching Assistant** — streaming chat tutor (`agents/tutor/`) grounded in the open lesson +
     the learner's RAG material (`build_tutor_messages` pulls `lessons[node_id]` + per-user
     `RagStore.retrieve`). `POST /sessions/{user}/{session}/chat` streams tokens over **SSE** and persists
     each turn to `learning_session["chat"]` (JSONB; user message saved before streaming so it survives a
@@ -211,7 +211,7 @@ Each item notes the **architecture section** it satisfies and the **code gap** i
     `TutorChat.tsx` (buffered SSE-over-fetch) on the session page. Verified live (real Groq → 74 token
     frames). *Deferred:* **voice** (Whisper STT / ElevenLabs TTS), multi-thread chats. *Satisfies:* §2.
 11. **Screen Vision + Browser Automation agents.** *Satisfies:* §2.
-12. 🟡 **Next.js 15 / React 19 frontend** (`web/`) — brought forward alongside #6 (it's what justifies
+12. ✅ **Next.js 15 / React 19 frontend** (`web/`) — brought forward alongside #6 (it's what justifies
     the HTTP backend). Dark-luxury UI consuming the FastAPI API via TanStack Query: localStorage login,
     session list/resume, **react-flow skill graph with real clickable nodes** (the upgrade the Streamlit
     iframe couldn't do), status-colored + prereq-locked nodes, lesson view (react-markdown), **Monaco**

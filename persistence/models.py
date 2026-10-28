@@ -5,6 +5,8 @@
 
 ``rag_chunks``: per-user ingested material for RAG (P2 #9), one row per chunk with its FastEmbed
 vector in a pgvector column, queried by cosine distance scoped to ``user_id``.
+
+``users``: user authentication identity and credentials for JWT security.
 """
 from datetime import datetime, timezone
 
@@ -45,6 +47,18 @@ class RagChunkRow(Base):
     source: Mapped[str] = mapped_column(String, nullable=False)  # filename, shown as the citation
     content: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[list[float]] = mapped_column(Vector(EMBED_DIM), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
+
+
+class UserRow(Base):
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    email: Mapped[str] = mapped_column(String, unique=True, nullable=False, index=True)
+    hashed_password: Mapped[str] = mapped_column(String, nullable=False)
+    full_name: Mapped[str] = mapped_column(String, nullable=True, default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now()
     )

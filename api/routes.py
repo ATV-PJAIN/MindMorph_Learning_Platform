@@ -3,6 +3,11 @@
 Pattern, every mutating endpoint: load the session from the repository → call a ``services`` function
 that mutates the dict → save the whole dict back → return it. The repository is resolved per request
 (``get_default_repository``), so the store (Postgres / in-memory) is swappable via config.
+
+Now secured with JWT authentication & multi-tenant isolation:
+Every request extracts verified user_id from request.state.user_id (populated by JWTAuthenticationMiddleware).
+Cross-tenant access returns 403 Forbidden.
+Rate limits applied via slowapi annotations.
 """
 import json
 import logging
@@ -10,9 +15,10 @@ import os
 import secrets
 import uuid
 
-from fastapi import APIRouter, File, Header, HTTPException, UploadFile
+from fastapi import APIRouter, File, Header, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
+from api.limiter import limiter
 from api.schemas import (
     AssessmentAnswersRequest,
     ChatRequest,
@@ -39,10 +45,6 @@ from services.learning_service import (
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Generation (orchestration / lesson compose / adaptation) is LLM-backed and can fail transiently —
-# rate limits (Groq TPM), timeouts, malformed model output. Surface those as a clean 503 with a safe
-# message (the real error is logged server-side, never leaked to the client) so the UI can show
-# "try again" instead of a raw 500.
 GEN_FAILED = "The learning service is busy or rate-limited. Please try again in a moment."
 
 
@@ -51,16 +53,34 @@ def _service_unavailable(what: str, exc: Exception) -> HTTPException:
     return HTTPException(status_code=503, detail=GEN_FAILED)
 
 
-def _load_or_404(repo, user_id: str, session_id: str) -> dict:
-    ls = repo.get(user_id, session_id)
+def _get_authed_user_id(request: Request, fallback_user_id: str | None = None) -> str:
+    """Return authenticated user_id from middleware state, with optional fallback for legacy calls."""
+    uid = getattr(request.state, "user_id", None)
+    if uid:
+        return uid
+    if fallback_user_id:
+        return fallback_user_id
+    raise HTTPException(status_code=401, detail="Authentication required")
+
+
+def _load_or_404(repo, authed_user_id: str, session_id: str, target_user_id: str | None = None) -> dict:
+    """Load session and verify multi-tenant ownership."""
+    # If target_user_id was passed in URL, enforce it matches authed_user_id
+    if target_user_id and target_user_id != authed_user_id:
+        raise HTTPException(
+            status_code=403, detail="Forbidden: You do not have permission to access another user's session"
+        )
+    ls = repo.get(authed_user_id, session_id)
     if ls is None:
         raise HTTPException(status_code=404, detail="Session not found")
     return ls
 
 
 @router.post("/sessions", response_model=StartSessionResponse)
-def create_session(req: CreateSessionRequest) -> StartSessionResponse:
-    """Run orchestration for a query. Only the SCOUT route yields a persisted learning_session."""
+@limiter.limit("10/minute")
+def create_session(request: Request, req: CreateSessionRequest) -> StartSessionResponse:
+    """Run orchestration for a query. Scoped strictly to the authenticated user."""
+    authed_user_id = _get_authed_user_id(request, req.user_id)
     try:
         result = start_session(req.query, req.format_type)
     except Exception as e:
@@ -74,16 +94,18 @@ def create_session(req: CreateSessionRequest) -> StartSessionResponse:
     if ls is not None:
         session_id = uuid.uuid4().hex
         ls["session_id"] = session_id
-        get_default_repository().save(req.user_id, session_id, ls, title=req.query)
+        ls["user_id"] = authed_user_id
+        get_default_repository().save(authed_user_id, session_id, ls, title=req.query)
         resp.session_id = session_id
         resp.learning_session = ls
     return resp
 
 
 @router.post("/sessions/stream")
-async def create_session_stream(req: CreateSessionRequest) -> StreamingResponse:
-    """Streaming twin of ``POST /sessions``: SSE progress (one frame per LangGraph node) instead of
-    one ~60s blocking wait. Terminal frame carries the same payload shape the sync route returns."""
+@limiter.limit("10/minute")
+async def create_session_stream(request: Request, req: CreateSessionRequest) -> StreamingResponse:
+    """Streaming twin of POST /sessions: SSE progress with verified user identity."""
+    authed_user_id = _get_authed_user_id(request, req.user_id)
 
     async def gen():
         try:
@@ -101,7 +123,8 @@ async def create_session_stream(req: CreateSessionRequest) -> StreamingResponse:
                 if ls is not None:
                     session_id = uuid.uuid4().hex
                     ls["session_id"] = session_id
-                    get_default_repository().save(req.user_id, session_id, ls, title=req.query)
+                    ls["user_id"] = authed_user_id
+                    get_default_repository().save(authed_user_id, session_id, ls, title=req.query)
                     resp.session_id = session_id
                     resp.learning_session = ls
                 yield _sse({"done": True, "session": resp.model_dump()})
@@ -113,39 +136,46 @@ async def create_session_stream(req: CreateSessionRequest) -> StreamingResponse:
 
 
 @router.get("/sessions/{user_id}", response_model=list[SessionMeta])
-def list_sessions(user_id: str) -> list[SessionMeta]:
-    return [SessionMeta(**m) for m in get_default_repository().list_sessions(user_id)]
+def list_sessions(request: Request, user_id: str) -> list[SessionMeta]:
+    authed_user_id = _get_authed_user_id(request, user_id)
+    if user_id != authed_user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: Cannot list sessions for another user")
+    return [SessionMeta(**m) for m in get_default_repository().list_sessions(authed_user_id)]
 
 
 @router.get("/sessions/{user_id}/{session_id}", response_model=SessionResponse)
-def get_session(user_id: str, session_id: str) -> SessionResponse:
+def get_session(request: Request, user_id: str, session_id: str) -> SessionResponse:
+    authed_user_id = _get_authed_user_id(request, user_id)
     repo = get_default_repository()
-    ls = _load_or_404(repo, user_id, session_id)
+    ls = _load_or_404(repo, authed_user_id, session_id, target_user_id=user_id)
     return SessionResponse(session_id=session_id, learning_session=ls)
 
 
 @router.post("/sessions/{user_id}/{session_id}/lessons/{node_id}", response_model=SessionResponse)
-def open_node_lesson(user_id: str, session_id: str, node_id: str) -> SessionResponse:
+@limiter.limit("30/minute")
+def open_node_lesson(request: Request, user_id: str, session_id: str, node_id: str) -> SessionResponse:
+    authed_user_id = _get_authed_user_id(request, user_id)
     repo = get_default_repository()
-    ls = _load_or_404(repo, user_id, session_id)
+    ls = _load_or_404(repo, authed_user_id, session_id, target_user_id=user_id)
     try:
-        ls = open_lesson(ls, node_id, user_id=user_id)
+        ls = open_lesson(ls, node_id, user_id=authed_user_id)
     except LockedNodeError as e:
-        # Server-side gate: a locked node cannot be opened even by a hand-crafted request.
         raise HTTPException(status_code=409, detail={"error": "locked", "pending": e.pending})
     except Exception as e:
-        # Lesson compose is LLM-backed (content + exercise) — transient failure ⇒ 503, not 500.
-        # Record the failed attempt (a funnel/content signal) and persist before surfacing the 503.
-        record_event(ls, STAGES.COMPOSE_FAILURE, node_id=node_id, error=type(e).__name__)
-        repo.save(user_id, session_id, ls)
+        record_event(ls, STAGES.COMPOSE_FAILURE, node_id=node_id, error=type(e).__name__, user_id=authed_user_id)
+        repo.save(authed_user_id, session_id, ls)
         raise _service_unavailable("open_lesson", e)
-    repo.save(user_id, session_id, ls)
+    repo.save(authed_user_id, session_id, ls)
     return SessionResponse(session_id=session_id, learning_session=ls)
 
 
 @router.post("/users/{user_id}/knowledge", response_model=IngestResponse)
-async def ingest_material(user_id: str, file: UploadFile = File(...)) -> IngestResponse:
-    """Ingest a user's PDF into their personal RAG store; its chunks ground future lessons (P2 #9)."""
+@limiter.limit("10/minute")
+async def ingest_material(request: Request, user_id: str, file: UploadFile = File(...)) -> IngestResponse:
+    """Ingest a user's PDF into their personal RAG store; scoped to authenticated user."""
+    authed_user_id = _get_authed_user_id(request, user_id)
+    if user_id != authed_user_id:
+        raise HTTPException(status_code=403, detail="Forbidden: Cannot upload files for another user")
     name = file.filename or "upload.pdf"
     if not name.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF uploads are supported.")
@@ -155,9 +185,8 @@ async def ingest_material(user_id: str, file: UploadFile = File(...)) -> IngestR
     from rag import registry
 
     try:
-        chunks = registry.ingest_pdf(user_id, data, name)
+        chunks = registry.ingest_pdf(authed_user_id, data, name)
     except ValueError as e:
-        # Unreadable / image-only PDF — client error, not a server fault.
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise _service_unavailable("ingest_material", e)
@@ -165,19 +194,20 @@ async def ingest_material(user_id: str, file: UploadFile = File(...)) -> IngestR
 
 
 @router.post("/sessions/{user_id}/{session_id}/assessment", response_model=SessionResponse)
+@limiter.limit("15/minute")
 def grade_session_assessment(
-    user_id: str, session_id: str, req: AssessmentAnswersRequest
+    request: Request, user_id: str, session_id: str, req: AssessmentAnswersRequest
 ) -> SessionResponse:
-    """Grade the onboarding diagnostic quiz; correct answers pre-seed mastered nodes (P2 #8)."""
+    authed_user_id = _get_authed_user_id(request, user_id)
     repo = get_default_repository()
-    ls = _load_or_404(repo, user_id, session_id)
+    ls = _load_or_404(repo, authed_user_id, session_id, target_user_id=user_id)
     try:
         ls = grade_assessment(ls, req.answers)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise _service_unavailable("grade_assessment", e)
-    repo.save(user_id, session_id, ls)
+    repo.save(authed_user_id, session_id, ls)
     return SessionResponse(session_id=session_id, learning_session=ls)
 
 
@@ -186,16 +216,16 @@ def _sse(payload: dict) -> str:
 
 
 @router.post("/sessions/{user_id}/{session_id}/chat")
-async def chat(user_id: str, session_id: str, req: ChatRequest) -> StreamingResponse:
-    """Stream a grounded teaching-assistant reply (SSE) and persist the turn (P3 #10)."""
+@limiter.limit("20/minute")
+async def chat(request: Request, user_id: str, session_id: str, req: ChatRequest) -> StreamingResponse:
+    authed_user_id = _get_authed_user_id(request, user_id)
     repo = get_default_repository()
-    ls = _load_or_404(repo, user_id, session_id)
-    # setdefault: sessions created before this feature have no `chat` key.
+    ls = _load_or_404(repo, authed_user_id, session_id, target_user_id=user_id)
     ls.setdefault("chat", [])
     ls["chat"].append({"role": "user", "content": req.message})
-    repo.save(user_id, session_id, ls)  # persist the question before streaming (survives a dropped stream)
+    repo.save(authed_user_id, session_id, ls)
 
-    messages = build_tutor_messages(ls, req.node_id, req.message, user_id)
+    messages = build_tutor_messages(ls, req.node_id, req.message, authed_user_id)
     from services.learning_service import _get_tutor_agent
 
     async def gen():
@@ -209,17 +239,20 @@ async def chat(user_id: str, session_id: str, req: ChatRequest) -> StreamingResp
             yield _sse({"error": GEN_FAILED})
             return
         ls["chat"].append({"role": "assistant", "content": full})
-        repo.save(user_id, session_id, ls)
+        repo.save(authed_user_id, session_id, ls)
         yield _sse({"done": True})
 
     return StreamingResponse(gen(), media_type="text/event-stream")
 
 
 @router.post("/sessions/{user_id}/{session_id}/grade", response_model=SessionResponse)
-def grade_node(user_id: str, session_id: str, node_id: str, req: GradeRequest) -> SessionResponse:
-    """Grade a submission, capture mastery, and run adaptation; ``node_id`` is a query param."""
+@limiter.limit("15/minute")
+def grade_node(
+    request: Request, user_id: str, session_id: str, node_id: str, req: GradeRequest
+) -> SessionResponse:
+    authed_user_id = _get_authed_user_id(request, user_id)
     repo = get_default_repository()
-    ls = _load_or_404(repo, user_id, session_id)
+    ls = _load_or_404(repo, authed_user_id, session_id, target_user_id=user_id)
     new_node_ids: list[str] = []
     result: dict | None = None
     try:
@@ -227,11 +260,10 @@ def grade_node(user_id: str, session_id: str, node_id: str, req: GradeRequest) -
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        # Grading itself is deterministic, but adaptation/regeneration is LLM-backed — guard anyway.
-        record_event(ls, STAGES.GRADE_FAILURE, node_id=node_id, error=type(e).__name__)
-        repo.save(user_id, session_id, ls)
+        record_event(ls, STAGES.GRADE_FAILURE, node_id=node_id, error=type(e).__name__, user_id=authed_user_id)
+        repo.save(authed_user_id, session_id, ls)
         raise _service_unavailable("grade", e)
-    repo.save(user_id, session_id, ls)
+    repo.save(authed_user_id, session_id, ls)
     return SessionResponse(
         session_id=session_id,
         learning_session=ls,
@@ -242,28 +274,22 @@ def grade_node(user_id: str, session_id: str, node_id: str, req: GradeRequest) -
 
 @router.post("/sessions/{user_id}/{session_id}/lessons/{node_id}/flag", response_model=SessionResponse)
 def flag_lesson(
-    user_id: str, session_id: str, node_id: str, req: FlagRequest
+    request: Request, user_id: str, session_id: str, node_id: str, req: FlagRequest
 ) -> SessionResponse:
-    """Record an explicit learner 'this lesson was off' flag — the direct content-quality signal."""
+    authed_user_id = _get_authed_user_id(request, user_id)
     repo = get_default_repository()
-    ls = _load_or_404(repo, user_id, session_id)
-    record_event(ls, STAGES.CONTENT_FLAGGED, node_id=node_id, reason=req.reason)
-    repo.save(user_id, session_id, ls)
+    ls = _load_or_404(repo, authed_user_id, session_id, target_user_id=user_id)
+    record_event(ls, STAGES.CONTENT_FLAGGED, node_id=node_id, reason=req.reason, user_id=authed_user_id)
+    repo.save(authed_user_id, session_id, ls)
     return SessionResponse(session_id=session_id, learning_session=ls)
 
 
 @router.get("/admin/funnel")
 def admin_funnel(x_admin_token: str | None = Header(default=None)) -> dict:
-    """Aggregate the Gate-1 funnel across every session (operator view).
-
-    Loads full session blobs across all users → shared-secret gated via the ``x-admin-token`` header
-    against ``MINDMORPH_ADMIN_TOKEN``. Returns 503 if the token isn't configured (fail closed), 403 on
-    mismatch. Real RBAC lands with auth in P3 #13.
-    """
+    """Aggregate the Gate-1 funnel across every session (operator view)."""
     expected = os.environ.get("MINDMORPH_ADMIN_TOKEN")
     if not expected:
         raise HTTPException(status_code=503, detail="Admin funnel disabled (MINDMORPH_ADMIN_TOKEN unset).")
-    # Constant-time compare: `!=` short-circuits and leaks the token byte-by-byte under timing analysis.
     if not x_admin_token or not secrets.compare_digest(x_admin_token, expected):
         raise HTTPException(status_code=403, detail="Forbidden")
 
@@ -277,7 +303,7 @@ def admin_funnel(x_admin_token: str | None = Header(default=None)) -> dict:
         "total_sessions": len(summaries),
         "reached_grade": sum(1 for s in summaries if s["reached_grade"]),
         "completed": sum(1 for s in summaries if s["completed"]),
-        "sessions_reaching_stage": stage_reach,  # how many sessions hit each stage (the funnel)
+        "sessions_reaching_stage": stage_reach,
         "low_score_total": sum(s["low_score_count"] for s in summaries),
         "regenerations_total": sum(s["regenerations"] for s in summaries),
         "content_flags_total": sum(s["content_flags"] for s in summaries),
