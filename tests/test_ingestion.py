@@ -94,7 +94,11 @@ def test_ingest_pdf_populates_user_store_and_isolates_users():
 # --- content graph routes by user_id ------------------------------------------------------------
 
 class _FakeContent:
-    def generate_content(self, q, fmt, remediation=None, context=None):
+    def __init__(self):
+        self.calls = []
+
+    def generate_content(self, q, fmt, remediation=None, context=None, primary_language=None):
+        self.calls.append((q, fmt, remediation, context, primary_language))
         return "DRAFT"
 
 

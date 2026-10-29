@@ -21,7 +21,6 @@ except ImportError:
         return decorator
 
 
-@traceable(name="learning_event_telemetry", run_type="tool")
 def emit_telemetry(event: dict[str, Any]) -> dict[str, Any]:
     """Emit a structured learning journey event to telemetry sinks.
 
@@ -34,6 +33,11 @@ def emit_telemetry(event: dict[str, Any]) -> dict[str, Any]:
     Returns:
         Telemetry delivery summary dict.
     """
+    # The persisted session timeline may contain private gap descriptions/free text.
+    # External telemetry only receives this allowlist, before any tracing/emission.
+    allowed = {"stage", "ts", "score", "passed", "total", "node_count", "format_type",
+               "cache_hit", "status", "elapsed_ms", "candidate_count", "passage_count"}
+    event = {k: v for k, v in event.items() if k in allowed and isinstance(v, (str, int, float, bool))}
     stage = event.get("stage", "unknown")
     kafka_result = emit_event_to_kafka(event)
     

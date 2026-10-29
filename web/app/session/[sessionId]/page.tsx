@@ -4,10 +4,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
 import { useState } from "react";
 import { AssessmentQuiz } from "@/components/AssessmentQuiz";
+import { AssessmentResults } from "@/components/AssessmentResults";
 import { GradeResult } from "@/components/GradeResult";
 import { LessonPanel } from "@/components/LessonPanel";
+import { LessonSkeleton } from "@/components/LessonSkeleton";
+import { PracticeHistory } from "@/components/PracticeHistory";
 import { SkillGraph } from "@/components/SkillGraph";
 import { TutorChat } from "@/components/TutorChat";
+import { EvidenceSources } from "@/components/EvidenceSources";
 import { LockedError, api } from "@/lib/api";
 import { completeNodeIds, incompletePrereqLabels } from "@/lib/status";
 import type { GradeResult as GradeResultT, SessionResponse } from "@/lib/types";
@@ -34,6 +38,7 @@ export default function SessionPage() {
   // coming back, and the graph growing new prerequisite nodes (all of which change the page's
   // structure without moving focus).
   const [liveMessage, setLiveMessage] = useState("");
+  const [showResults, setShowResults] = useState(false);
 
   const key = ["session", userId, sessionId];
 
@@ -64,9 +69,10 @@ export default function SessionPage() {
 
   const grade = useMutation({
     mutationFn: ({ nodeId, solution }: { nodeId: string; solution: string }) =>
-      api.grade(userId!, sessionId, nodeId, solution),
+      api.grade(userId!, sessionId, nodeId, solution, sessionQ.data?.learning_session.lessons[nodeId]?.exercise?.revision),
     onSuccess: (res, vars) => {
       writeBack(res);
+      setErrorMsg(null);
       if (res.grade_result) {
         setGradeOutcome({
           nodeId: vars.nodeId,
@@ -92,7 +98,12 @@ export default function SessionPage() {
 
   const assess = useMutation({
     mutationFn: (answers: number[]) => api.gradeAssessment(userId!, sessionId, answers),
-    onSuccess: writeBack,
+    onSuccess: (res) => {
+      writeBack(res);
+      if (res.learning_session.assessment?.results) {
+        setShowResults(true);
+      }
+    },
     onError: (e) => setErrorMsg(e.message),
   });
 
@@ -145,7 +156,9 @@ export default function SessionPage() {
       {/* The Reviewer agent's verdict, surfaced. The pipeline serves a rejected graph anyway (the
           path is still completable), so the learner has to be told the plan may have a hole — but
           only when the verdict is explicitly false; null/absent means "no verdict", not "failed". */}
+      {session.assessment?.submitted && session.assessment.results && <button className="accent-ring mt-4 rounded-lg border px-4 py-2" onClick={() => setShowResults(true)}>Review assessment</button>}
       {session.review_passed === false && <ReviewCaveat notes={session.review_notes} />}
+      <EvidenceSources evidence={session.grounding} />
 
       {pendingAssessment && session.assessment ? (
         <section className="mt-8">
@@ -168,6 +181,13 @@ export default function SessionPage() {
               setErrorMsg(null);
               assess.mutate(session.assessment!.quiz.questions.map(() => -1));
             }}
+          />
+        </section>
+      ) : showResults && session.assessment ? (
+        <section className="mt-8">
+          <AssessmentResults 
+            assessment={session.assessment}
+            onContinue={() => setShowResults(false)}
           />
         </section>
       ) : (
@@ -208,12 +228,29 @@ export default function SessionPage() {
             ⚠️ {errorMsg}
           </p>
         )}
-        {open.isPending && <p className="mt-3 text-sm text-text-muted">Composing lesson…</p>}
+        {errorMsg && <button className="accent-ring mt-2 rounded-lg border px-4 py-2" onClick={() => { void sessionQ.refetch(); setErrorMsg(null); }}>Reload saved progress</button>}
+        {open.isPending && (
+          <p className="mt-3 flex items-center gap-2 text-sm text-text-muted">
+            <span className="lesson-skeleton-spinner" />
+            Composing lesson…
+          </p>
+        )}
       </section>
 
       <section className="mt-8">
-        {selected && session.lessons[selected] ? (
+        {open.isPending ? (
+          <LessonSkeleton />
+        ) : gradeOutcome && gradeOutcome.nodeId === selected ? (
+          // The grade just came back — show the result panel prominently.
+          <GradedOutcome
+            outcome={gradeOutcome}
+            label={session.skill_graph.nodes.find((n) => n.id === gradeOutcome.nodeId)?.label}
+            locked={!!session.node_state[gradeOutcome.nodeId]?.remediation_pending}
+            weaknesses={session.node_state[gradeOutcome.nodeId]?.weaknesses ?? []}
+          />
+        ) : selected && session.lessons[selected] ? (
           <LessonPanel
+            key={`${selected}:${session.lessons[selected]?.exercise?.revision ?? "legacy"}`}
             session={session}
             nodeId={selected}
             grading={grade.isPending}
@@ -221,20 +258,19 @@ export default function SessionPage() {
             onFlag={() => flag.mutate(selected)}
             flagging={flag.isPending}
           />
-        ) : gradeOutcome && gradeOutcome.nodeId === selected ? (
-          // The lesson was dropped by the grade that just came back — keep the result on screen.
-          <GradedOutcome
-            outcome={gradeOutcome}
-            label={session.skill_graph.nodes.find((n) => n.id === gradeOutcome.nodeId)?.label}
-            locked={!!session.node_state[gradeOutcome.nodeId]?.remediation_pending}
-            weaknesses={session.node_state[gradeOutcome.nodeId]?.weaknesses ?? []}
-          />
         ) : (
           <div className="surface flex min-h-[160px] items-center justify-center p-8 text-center text-text-muted">
             Pick a skill on the graph to open its lesson.
           </div>
         )}
       </section>
+
+      {selected && <PracticeHistory
+        key={selected}
+        events={session.events}
+        nodeId={selected}
+        label={session.skill_graph.nodes.find((node) => node.id === selected)?.label ?? selected}
+      />}
 
       <TutorChat
         userId={userId!}
@@ -292,8 +328,7 @@ function ReviewCaveat({ notes }: { notes?: string | null }) {
   );
 }
 
-// Shown in place of the lesson panel when a grade cleared the cached lesson: the score and feedback
-// stay readable, and the learner is told what the graph just did in response.
+// Shown in place of the lesson panel after a grade is received, so the learner clearly sees what happened.
 function GradedOutcome({
   outcome,
   label,
@@ -305,6 +340,9 @@ function GradedOutcome({
   locked: boolean;
   weaknesses: string[];
 }) {
+  const score = Math.round(outcome.result.score ?? 0);
+  const mastered = !outcome.result.harness_error && score >= 80;
+
   return (
     <article className="surface p-7 md:p-10">
       <p className="eyebrow mb-4">
@@ -326,7 +364,11 @@ function GradedOutcome({
       )}
 
       <div className="mt-6 border-t border-white/5 pt-5 text-sm text-text-muted">
-        {locked ? (
+        {mastered ? (
+          <p className="font-medium" style={{ color: "var(--color-mastered)" }}>
+            Awesome work! You've mastered this skill. Pick the next available skill on the map to continue your path.
+          </p>
+        ) : locked ? (
           <p>
             This skill is locked until its prerequisites are complete
             {outcome.newNodeCount > 0
@@ -334,8 +376,7 @@ function GradedOutcome({
                   outcome.newNodeCount === 1 ? "skill was" : "skills were"
                 } added to the map above.`
               : "."}{" "}
-            Work through those first; reopening this skill will then give you a new lesson aimed at the
-            gaps.
+            Work through those first; reopening this skill will then give you a new lesson aimed at the gaps.
           </p>
         ) : (
           <p>

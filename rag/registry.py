@@ -9,6 +9,8 @@ can monkeypatch it with a fake — no model download).
 """
 import logging
 import os
+import uuid
+from threading import RLock
 from typing import Optional
 
 from rag.store import RagStore, _chunk_text
@@ -18,6 +20,7 @@ logger = logging.getLogger(__name__)
 _user_stores: dict[str, RagStore] = {}
 _global_store: Optional[RagStore] = None
 _global_built = False
+_store_lock = RLock()
 
 
 def _use_postgres() -> bool:
@@ -40,33 +43,40 @@ def get_user_store(user_id: str, create: bool = False):
         from rag.pg_store import PgRagStore
 
         return PgRagStore(user_id)
-    store = _user_stores.get(user_id)
-    if store is None and create:
-        store = _new_store()
-        _user_stores[user_id] = store
+    with _store_lock:
+        store = _user_stores.get(user_id)
+        if store is None and create:
+            store = _new_store()
+            _user_stores[user_id] = store
     return store
 
 
 def get_global_store() -> Optional[RagStore]:
     """Cached store built from ``config.KNOWLEDGE_DIR`` (shared seed corpus). None if empty/missing."""
     global _global_store, _global_built
-    if not _global_built:
-        import config
-
-        _global_store = RagStore.from_knowledge_dir(config.KNOWLEDGE_DIR)
-        _global_built = True
+    with _store_lock:
+        if not _global_built:
+            import config
+            _global_store = RagStore.from_knowledge_dir(config.KNOWLEDGE_DIR)
+            _global_built = True
     return _global_store
 
 
 def ingest_pdf(user_id: str, data: bytes, filename: str) -> int:
     """Extract a PDF, chunk it, and add it to the user's store. Returns the chunk count."""
-    from rag.pdf import extract_text_from_pdf
+    from rag.pdf import extract_pages_from_pdf
 
-    text = extract_text_from_pdf(data)
-    chunks = _chunk_text(text)
+    pages = extract_pages_from_pdf(data)
+    source_id = uuid.uuid4().hex
+    chunks, metadata = [], []
+    for page, text in pages:
+        parts = _chunk_text(text)
+        chunks.extend(parts)
+        metadata.extend({"source": filename, "source_id": source_id, "page": page} for _ in parts)
     store = get_user_store(user_id, create=True)
-    store.add_texts(chunks, metadatas=[{"source": filename}] * len(chunks))
-    logger.info("RAG: ingested %d chunk(s) from %r for user %s", len(chunks), filename, user_id)
+    store.add_texts(chunks, metadatas=metadata)
+    logger.info("RAG: ingested %d chunk(s); %d page(s) without extractable text",
+                len(chunks), sum(not text for _, text in pages))
     return len(chunks)
 
 

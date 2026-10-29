@@ -9,6 +9,11 @@ import pytest
 from persistence.neo4j_graph import write_session_progress, get_completed_and_locked_nodes
 from persistence.neo4j_db import get_driver
 
+pytestmark = pytest.mark.skipif(
+    os.getenv("MINDMORPH_TEST_NEO4J_DISPOSABLE") != "1",
+    reason="Legacy graph tests require an explicitly disposable Neo4j database",
+)
+
 @pytest.fixture(autouse=True)
 def clean_neo4j():
     """Clean the Neo4j database before and after each test."""

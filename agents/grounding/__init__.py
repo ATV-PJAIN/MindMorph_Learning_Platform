@@ -1,0 +1,1 @@
+"""Knowledge grounding specialist."""

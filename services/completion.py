@@ -44,18 +44,12 @@ def prereqs_by_node(skill_graph: dict) -> dict:
 
 # PHASE 3: Neo4j Cache for Completion and Locks
 def _get_neo4j_state(skill_graph: dict, node_state: dict) -> tuple[set, set]:
-    """Helper to fetch completed and locked nodes from Neo4j."""
-    session_id = skill_graph.get("session_id") or node_state.get("session_id")
-    if not session_id:
-        # Fallback for old sessions or tests without session_id
-        return _fallback_state(skill_graph, node_state)
-    
-    from persistence.neo4j_graph import get_completed_and_locked_nodes
-    return get_completed_and_locked_nodes(session_id)
+    """Compatibility name: saved session state is always authoritative, including outages."""
+    return _fallback_state(skill_graph, node_state)
 
 
 def _fallback_state(skill_graph: dict, node_state: dict) -> tuple[set, set]:
-    """Original Python DFS fallback for tests and old sessions."""
+    """Derive authoritative completion/locks from the saved session graph and progress."""
     prereqs = prereqs_by_node(skill_graph)
 
     def _is_mastered(nid: str) -> bool:
@@ -96,8 +90,6 @@ def _fallback_state(skill_graph: dict, node_state: dict) -> tuple[set, set]:
 
 
 def complete_node_ids(skill_graph: dict, node_state: dict, session_id: str = None) -> set:
-    if session_id:
-        skill_graph["session_id"] = session_id
     completed, _ = _get_neo4j_state(skill_graph, node_state)
     return completed
 
@@ -111,8 +103,6 @@ def is_session_complete(skill_graph: dict, node_state: dict, session_id: str = N
 
 
 def locked_node_ids(skill_graph: dict, node_state: dict, session_id: str = None) -> set:
-    if session_id:
-        skill_graph["session_id"] = session_id
     _, locked = _get_neo4j_state(skill_graph, node_state)
     return locked
 

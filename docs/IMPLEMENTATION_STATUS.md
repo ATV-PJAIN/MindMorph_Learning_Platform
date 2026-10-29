@@ -8,6 +8,28 @@
 
 **Status legend:** ✅ Done · 🟡 Partial / stub · ⛔ Planned (not in code)
 
+**Grading repair verified 16 October 2026:** Python, Node.js JavaScript and SQLite SQL execution
+are implemented. Windows and Ubuntu backend verification: **385 passed, 3 real-database checks skipped on each**;
+Final runner regressions: **93 passed on each platform**, including path names with spaces.
+Playwright: **44 passed**; type checking and a clean production build passed. The working-tree
+repair was committed as `b57c43b` on `feature/learning-flow-improvements`. These checks do not
+verify a deployment. Detailed audit and work records are kept as local-only documents.
+
+**Reliability repair - 21 October 2026:** PostgreSQL no longer falls back silently to memory.
+Session writes compare a revision (migration `0003_session_revision`); stale updates return a conflict.
+`/health` reports process liveness; `/ready` checks database connectivity and migration head, and labels
+memory mode as non-durable. Database migrations are explicit (`python -m alembic upgrade head`), not
+created at API startup. Real-database tests cover concurrent writes, fresh API processes and outage/recovery.
+Assessment retries preserve mastery; question IDs and answer bounds are checked. Initial roadmaps and
+adaptations reject structural defects; grading rechecks locks and exercise revisions. A validated learner
+profile reaches planning, content, examples, practice, assessment and tutor messages. Non-coding domains
+avoid coding-only research sources. Dialog accessibility, skip/failure recovery and persisted assessment
+review are implemented. **Verification: 415 backend tests passed with zero skips (real database enabled); 50 browser tests
+passed; type checking and a clean isolated production build passed.** Two approved live hosted samples
+(JavaScript/browser widget and guitar/song) passed follow-up generation and produced valid seven-skill
+roadmaps; the guitar path had no coding skills. Research perspectives were synthetic supplied inputs.
+Comprehensive live lesson/exercise quality, a fresh Ubuntu run and public deployment remain unverified.
+
 ---
 
 ## 1. Current Architecture vs Target
@@ -23,7 +45,7 @@
 | **Grounding / RAG** | **Opt-in local RAG** (FastEmbed + pgvector/in-memory, `rag/`, `MINDMORPH_RAG=1`) — augments web search, never replaces it | RAG pipelines + agentic web search (Playwright/Firecrawl) |
 | **Observability** | LangSmith hooks (optional) + per-invocation token/cost accounting (`services/cost.py` `TokenMeter`) + per-stage wall-clock spans (`services/timing.py`, surfaced on `learning_session.timing` / `lessons[node].timing` and as `timing:` log lines); no metrics backend/exporter | Prometheus/Grafana/OpenTelemetry + Prompt Registry feedback loop |
 
-The repo is a **working multi-agent prototype** with **P0-P1 complete**: the Learning-Plan DAG
+The repo is a **working multi-agent prototype** with the **core P0-P1 learning loop implemented**: the Learning-Plan DAG
 (orchestrate → scout → academic/market/practical → consensus → reviewer → Skill Dependency Graph),
 the dual-path Content DAG (creative + live web grounding → synthesizer), the Exercise DAG + live
 grading, and the FastAPI + Postgres backend all run end-to-end. CrewAI is a non-goal — parallel
@@ -65,7 +87,7 @@ but nothing exports them to a metrics backend (see roadmap below).
 |---|---|---|---|
 | Format Selector / GitHub / Blog / Dataset agents | ✅ | `agents/exercise/format_selector_agent.py`, `graph/exercise_graph.py` | LangGraph Exercise DAG: format selector → [GitHub MCP \| Blog (ddgs) \| Dataset (ddgs links)] fan-in. EXERCISE route now live (no more placeholder). |
 | Synthesizer / Grading Setup (unit tests + rubric) | ✅ | `agents/exercise/exercise_synthesizer_agent.py`, `agents/exercise/grader_agent.py` | Synthesizer personalizes; Grader emits unit tests (coding) or rubric (case study). |
-| **Live auto-grading** | ✅ | `tools/code_executor.py`, `grader_agent.grade_submission` | Coding → runs submission against tests in an isolated subprocess (self-contained runner, no pytest dep; hang-guard, not a sandbox). Case study → LLM rubric scoring. Wired into `POST /sessions/{user}/{session}/grade` (the Streamlit Grade button is gone with `app.py`). |
+| **Live auto-grading** | ✅ | `tools/code_executor.py`, `grader_agent.grade_submission` | Python lightweight runner (sync/async, no pytest dependency in child), Node.js 20 native test runner (existing suites and exported test functions), SQLite schema/data exercises. SQL assertions share one validated JSON-array contract; verification queries are read-only. Empty, malformed, fixture-dependent or generator artifacts cannot earn credit. Separate result files, process exit checks and bounded diagnostics prevent stdout-based or unfinished-test grades. Harness defects leave mastery unchanged. Local hang-guard, not a security sandbox. |
 
 ## 5. Status by Architecture Layer
 
@@ -74,9 +96,9 @@ but nothing exports them to a metrics backend (see roadmap below).
 | Frontend | ✅ | **Next.js** (`web/`) is the product; legacy Streamlit `app.py` **retired** (P3 #12). JupyterLite in-browser scratchpad embedded in the lesson. |
 | Application Service | 🟡 | **FastAPI** (`api/`) exposes the loop over HTTP; agents + LangSmith prompt registry exist. Still **no** Celery, gateway, rate limiting. |
 | AI / LLM | 🟡 | **LangGraph** orchestration ✅ (CrewAI is a non-goal — parallel LangGraph nodes cover it). Grounding: live web (DuckDuckGo) **+ opt-in local RAG** (FastEmbed + InMemoryVectorStore, `rag/`) in the Content dual-path. **Groq key-pool → local-Ollama provider chain** ✅ (`config.get_chat_model`, `llm_providers.ProviderChain`) — keys optional; zero-key clones run entirely on local Ollama. **Eval pipeline** 🟡 — offline content-groundedness LLM-judge (`evals/`, `python -m evals.run`). **Prompt Registry**: ✅ via `prompts/prompt_registry_wrapper_method.py` (LangSmith). |
-| Data | ✅ | **Hybrid Neo4j + PostgreSQL** — **Neo4j** (canonical graph, Cypher completion engine, checkpointer) + **PostgreSQL** (sessions JSONB, graph_cache, pgvector). Docker Compose includes Postgres, Neo4j, Kafka. |
-| Infrastructure | 🟡 | Docker Compose (docker-compose.yml) runs PostgreSQL (pgvector), Neo4j, and Kafka locally. Still **no** K8s/Terraform/Prometheus/CI-CD. |
-| Analytics & Continuous Improvement | 🟡 | Real-time Kafka event streaming (services/kafka_emitter.py, mindmorph.learning_events) + LangSmith spans (services/telemetry.py) + append-only session events (services/events.py). No data warehouse yet. |
+| Data | 🟡 | **PostgreSQL** ✅ — learning sessions (JSONB, #6) + per-user RAG vectors (**pgvector**, #9). Still **no** Redis/S3/Kafka. |
+| Infrastructure | 🟡 | Test CI exists: Python suite on Windows/Linux with Node.js, plus Playwright. No deployment pipeline, K8s/Terraform or Prometheus. |
+| Analytics & Continuous Improvement | ⛔ | No telemetry pipeline, warehouse, or human-review loop. |
 | LLM Ops & Production | 🟡 | Provider chain (Groq pool → Ollama) ✅ + content-groundedness eval ✅ (`evals/`) + **token/cost accounting** 🟡 (`services/cost.py` `TokenMeter`, priced per model, on the lesson-compose path only — see Cross-cutting) + **latency observability** 🟡 (`services/timing.py` wall-clock spans on the graph / lesson / grade paths — log lines plus a dict on the session payload; no metrics backend or exporter, see Cross-cutting). Still **no** deployment pipeline. |
 | Security & Governance | ⛔ | No auth/RBAC/encryption/PII scrubbing. Only `.env` secrets + `.gitignore`. |
 
@@ -91,7 +113,7 @@ but nothing exports them to a metrics backend (see roadmap below).
 | Skill graph renderer | ✅ | `graph/skill_graph_render.py` | Deterministic SkillGraph JSON → Mermaid. |
 | LLM config | ✅ | `config.py` | Groq `openai/gpt-oss-120b` / local Ollama `qwen2.5:7b`\|`:14b`, temp 0.1. `GROQ_API_KEYS` (comma-separated pool) is optional and validated nowhere — absent/empty simply selects the Ollama path. |
 | Next.js frontend | ✅ | `web/` | SCOUT skill-graph + CONTENT dual-path, Mermaid render, lesson view, grading. Legacy Streamlit `app.py` **retired** (P3 #12) — it no longer exists in the repo. |
-| Tests | 🟡 | `tests/`, `web/tests/` | pytest: 268 passed, 3 skipped across 30 files (graph routing/fan-in, content dual-path, skill-graph render + dangling-edge prune, RAG/ingestion/pgvector, assessment, tutor chat, provider-chain rotation/fallback, cost/usage, stage timing, GitHub query normalisation, funnel events, import guards). Playwright: 30 passed across 5 specs (mocked-API E2E loop + lock gate, dagre layout/camera framing, Mermaid sanitise + containment, lock-message labels). |
+| Tests | 🟡 | `tests/`, `web/tests/` | 16 October verification: pytest **385 passed, 3 DB-gated checks skipped on each of Windows and Ubuntu**, across 35 files; Playwright **44 passed** across 7 specs. Includes real Python/JS/SQL runner regressions and HTTP grading/mastery checks, plus existing graph/RAG/provider/assessment/tutor/observability tests. Type checking and clean production build pass. Real DB durability and live AI quality remain separate checks. |
 
 ---
 
@@ -129,26 +151,36 @@ Each item notes the **architecture section** it satisfies and the **code gap** i
     `graph/lesson_graph.py`, `agents/adaptation/`, `graph/skill_graph_adapt.py` (deterministic,
     id-stable merge). State lives in the `learning_session` blob (originally Streamlit session state;
     persisted to Postgres JSONB by #6).
-    Deferred to #6: Postgres/Redis persistence of `node_state`/`lessons`.
-6. ✅ **Persistence + backend** — **FastAPI** service (`api/`) exposes the loop over HTTP (create session /
-   list / get / open lesson / grade), each endpoint load→service→save. Loop logic extracted Streamlit-free
-   into `services/` (mastery, completion, orchestration). **Postgres** persistence via the Repository pattern
-   (`persistence/`): a `learning_session` stored as one JSONB row keyed by `(user_id, session_id)` —
-   Alembic migration + `docker-compose.yml`. An in-memory repo (`MINDMORPH_STORE=memory`) backs zero-infra
-   tests/dev. MVP user id = caller-supplied (no auth yet). **Verified on real Postgres:** create → open
-   lesson → grade (→ adaptation, 6→8 nodes) → **killed + rebooted the process → GET returned the graded
-   state intact** (cross-process durability proof); DB-gated integration test guards the JSONB path. 108
-   tests green. *Deferred:* Redis (JSONB suffices at prototype scale); re-pointing Streamlit at the API
-   (#12 retires it); Pinecone. *Satisfies:* §5.2, §5.4. *Closes:* the stateless prototype.
-7. ✅ **Provider chain (Groq pool → Ollama) + RAG** — _RAG (grounding):_ `rag/` package adds a **local, no-API-key** retrieval
-   arm. `rag/embeddings.py` wraps **FastEmbed** (ONNX `BAAI/bge-small-en-v1.5`, no torch) as a LangChain
-   `Embeddings`; `rag/store.py` `RagStore` over `langchain_core` `InMemoryVectorStore` (chunk + `Source:`
-   output mirrors `gather_facts`). `build_content_graph(..., retriever=)` merges KB chunks **+** web search
-   into `factual_findings` (single-source stays verbatim; both labelled) — RAG **augments**, never replaces
-   web. Corpus = `knowledge_base/*.md|.txt` (P2 #9 uploads feed the same store later). **Opt-in**
-   (`MINDMORPH_RAG=1`, `MINDMORPH_KNOWLEDGE_DIR`) so dev/tests never download the model; verified live
-   (real FastEmbed indexed the seed corpus and retrieved on a semantic query). Remaining ⛔: pgvector at
-   scale, RAG in the exercise blog/dataset path, re-ranking. _Provider chain:_
+    Postgres persists `node_state`/`lessons` via #6; Redis remains deferred.
+6. ✅ **Persistence + backend** - FastAPI (`api/`) exposes create/list/get/open/grade/assessment/chat.
+   Postgres stores each learning session in JSONB, keyed by `(user_id, session_id)`; repository reads
+   carry an out-of-band revision and updates compare/increment the row revision atomically. A stale
+   save returns **409**, including when a tutor stream finishes after another mutation. Database
+   failures return **503** and never use a hidden memory fallback. Explicit `MINDMORPH_STORE=memory`
+   remains process-local development/test storage with the same conflict contract.
+   **Schema:** run Alembic through `0003_session_revision`; startup no longer auto-creates tables.
+   `/health` is liveness; `/ready` checks connectivity and migration head (503 if unavailable/pending;
+   memory reports `durable: false`). Connection, query, lock and pool waits are bounded.
+   **Verified 21 October:** actual JSONB reads, simultaneous updates, lessons/mastery/assessment reads
+   through two fresh API processes, pgvector user isolation, actual database outage and recovery.
+   Conflict handling deliberately rejects stale changes; it does not silently merge or repeat grading.
+   *Deferred:* Redis and public identity/ownership (P3 #13). *Satisfies:* architecture 5.2, 5.4.
+7. 🟡 **Provider chain (Groq pool → Ollama) + grounded learning** — _P1 #7 grounding implementation:_ a fourth
+   Knowledge Grounding Agent retrieves personal/shared/public evidence without another rewriting
+   LLM call. Consensus explicitly joins all four branches and Reviewer sees the evidence/profile.
+   The common helper supplies scored/deduplicated passages, local MiniLM reranking, hard budgets,
+   bounded public-page fetching, validated source references and explicit evidence status. New
+   lessons/practice share one frozen bundle; tutor retrieval includes the selected skill and saves
+   source metadata. Personal uploads and opt-in shared material are searched independently; unrelated
+   uploads are excluded and saved paths/lessons remain intact. New text-PDF passages retain real
+   pages/source identity; legacy provenance stays unknown. Grounded paths bypass shared roadmap
+   caches/checkpoints. Session state enforces prerequisites; atomic Neo4j mirrors isolate each
+   caller/session and reject stale revisions. Migration heads merge before nullable provenance fields.
+   Verification includes disposable migration/preservation/restart/outage/isolation checks and
+   100,000 passages with ten simultaneous exact tenant-filtered searches; that capacity fixture uses
+   deterministic vectors with web/ranking disabled, separately from real local-model quality samples.
+   See [GROUNDING.md](GROUNDING.md) for current contracts and verification commands. ANN indexing,
+   OCR, library selection/removal and additional formats remain deferred. _Provider chain:_
    `llm_providers.py` + `config.get_chat_model(tier, provider, fallback)`: two vendor choices
    (`groq` | `ollama`). **Primary** = `provider` arg or `MINDMORPH_LLM_PROVIDER` env (defaults to
    `groq` when `GROQ_API_KEYS` holds keys, `ollama` otherwise); **fallback** = `fallback` arg or
@@ -171,11 +203,21 @@ Each item notes the **architecture section** it satisfies and the **code gap** i
    Remote multi-vendor HTTP routing (Anthropic/OpenAI/Gemini) still open. *Satisfies (partial):* §5.3, §5.7.
 
 ### P2 — Personalization & ingestion
-8. ✅ **Onboarding + Dynamic Skill Assessment** — after a path is created, `SkillAssessmentAgent`
+8. 🟡 **Onboarding + Dynamic Skill Assessment** - **21 October additions:** follow-up questions use
+   validated IDs/options and normalized language/scope values; collected answers become a learner
+   profile supplied to research, consensus, diagnostics, lessons, examples, exercises and tutor context.
+   Non-coding domains skip job/GitHub/dataset coding sources and use written practice. Quiz retries
+   are idempotent, correct answers preserve existing mastery/attempts, and saved review results use
+   question IDs. Skip All continues; failed/empty follow-up responses offer explicit continuation.
+   Newly generated/opened exercises carry revisions; stale/missing revision submissions and locked
+   node submissions are rejected. Structural validation checks graph IDs, levels, edges and cycles;
+   initial generation has one repair attempt; invalid adaptations preserve the grade and original graph.
+   **Two live follow-up/roadmap samples passed; broader AI teaching quality remains unverified.** Existing diagnostic behavior follows: after a path
+   is created, `SkillAssessmentAgent`
    (`agents/assessment/`, structured-output MCQ from the skill graph) generates a diagnostic quiz stored
    in `learning_session["assessment"]`. `POST /sessions/{user}/{session}/assessment` grades it:
    correct answers give those nodes a **head-start (`in_progress`, score `ASSESSMENT_PASS_SCORE`=60), NOT
-   `mastered`** via `services/mastery.apply_score` — one MCQ isn't mastery, and full-mastering on a perfect
+   `mastered`**, without counting an exercise attempt — one MCQ isn't mastery, and full-mastering on a perfect
    quiz would empty the path (the learner still studies; passing the node's exercise upgrades it). Unknown/
    hallucinated `node_id`s skipped (no phantom node_state). Web quiz UI (`web/components/AssessmentQuiz.tsx`)
    gates the session page until submitted/skipped. Quiz generation is best-effort (failure → no quiz, path
@@ -185,9 +227,12 @@ Each item notes the **architecture section** it satisfies and the **code gap** i
      (`generate_content(..., context=ls["summary"])` threaded route→lesson→content graph), so a generic
      prerequisite like "Programming Fundamentals" is taught in the path's language (JavaScript for a MERN
      path, not Python). Verified live (MERN ctx → JS, Python ctx → Python).
-   - **Exercise language caveat:** the auto-grader executes **Python only**, so the format-selector routes
-     non-Python skills (JS/React/Node/SQL, conceptual) to **`case_study`** (rubric-graded prose) — a MERN
-     node gets a written exercise, not a Python one. A real JS/Node execution harness is future work.
+   - **Exercise languages:** executable challenges support **Python, JavaScript (Node.js 20), and
+     SQLite SQL**. Aliases (`py`, `js`, `node`, `sqlite`) normalize before routing. The cached exercise
+     language must agree with its grading artifact; explicit unsupported execution languages never
+     silently use Python. Other languages/conceptual exercises use `case_study`. SQL currently means
+     learner-provided schema/data followed by verification SELECTs; query-only seeded-table exercises
+     are not implemented. Learner-profile/content/example wiring is implemented and regression-tested; live language adherence and teaching quality remain unverified.
 9. ✅ **User material ingestion** — `POST /users/{user_id}/knowledge` (multipart PDF) → **PyMuPDF**
    extract (`rag/pdf.py`) → chunk → **per-user** RAG store (`rag/registry.py`), keyed by user_id, with a
    **web upload UI** (`web/components/KnowledgeUpload.tsx`). The content graph resolves the retriever
@@ -200,7 +245,7 @@ Each item notes the **architecture section** it satisfies and the **code gap** i
    OCR for image-only PDFs, ANN index (ivfflat/hnsw) at scale. *Satisfies:* §2, §5.4.
 
 ### P3 — Full product surface
-10. ✅ **AI Teaching Assistant** — streaming chat tutor (`agents/tutor/`) grounded in the open lesson +
+10. 🟡 **AI Teaching Assistant** — streaming chat tutor (`agents/tutor/`) grounded in the open lesson +
     the learner's RAG material (`build_tutor_messages` pulls `lessons[node_id]` + per-user
     `RagStore.retrieve`). `POST /sessions/{user}/{session}/chat` streams tokens over **SSE** and persists
     each turn to `learning_session["chat"]` (JSONB; user message saved before streaming so it survives a
@@ -211,7 +256,7 @@ Each item notes the **architecture section** it satisfies and the **code gap** i
     `TutorChat.tsx` (buffered SSE-over-fetch) on the session page. Verified live (real Groq → 74 token
     frames). *Deferred:* **voice** (Whisper STT / ElevenLabs TTS), multi-thread chats. *Satisfies:* §2.
 11. **Screen Vision + Browser Automation agents.** *Satisfies:* §2.
-12. ✅ **Next.js 15 / React 19 frontend** (`web/`) — brought forward alongside #6 (it's what justifies
+12. 🟡 **Next.js 15 / React 19 frontend** (`web/`) — brought forward alongside #6 (it's what justifies
     the HTTP backend). Dark-luxury UI consuming the FastAPI API via TanStack Query: localStorage login,
     session list/resume, **react-flow skill graph with real clickable nodes** (the upgrade the Streamlit
     iframe couldn't do), status-colored + prereq-locked nodes, lesson view (react-markdown), **Monaco**
@@ -227,11 +272,13 @@ Each item notes the **architecture section** it satisfies and the **code gap** i
     *Satisfies:* §5.5, §5.6, §5.8.
 
 ### Cross-cutting
-- 🟡 **Test suite** — pytest (`tests/`, 268 passed, 3 skipped: graph routing/fan-in, content dual-path, skill-graph
+- 🟡 **Test suite** — pytest (`tests/`, 385 passed, 3 DB-gated skips on Windows and Ubuntu, verified 16 October 2026: graph routing/fan-in, content dual-path, skill-graph
   render + dangling-edge prune, RAG/ingestion/pgvector, assessment, tutor chat, provider-chain rotation/fallback,
   cost/usage accounting, stage timing, GitHub query normalisation, funnel events, import guards) plus Playwright
-  (`web/tests/`, 30 passed: mocked-API E2E loop + lock gate, dagre layout/camera framing, Mermaid sanitise +
-  containment, lock-message labels). Growing.
+  (`web/tests/`, 44 passed: mocked-API E2E loop + lock gate, onboarding/summary navigation, actual Monaco
+  JS/SQL language checks, harness-error feedback, dagre framing, Mermaid containment and lock labels).
+  Real runner regressions additionally cover async failures, empty tests, legacy artifacts, SQL
+  assertion validation, language disagreement, spoofed stdout, bounded errors and descendant cleanup.
 - 🟡 **Funnel instrumentation (Gate-1)** — `services/events.py` appends a structured event to an
   append-only `learning_session["events"]` timeline at every loop chokepoint (`session_created`,
   `assessment_submitted`, `lesson_opened`, `exercise_graded`, `node_mastered`/`needs_review`,
@@ -241,7 +288,13 @@ Each item notes the **architecture section** it satisfies and the **code gap** i
   thumbs-down (`POST …/lessons/{node}/flag` → `content_flagged`, surfaced in `web/LessonPanel`).
   Operator view `GET /admin/funnel` (shared-secret `x-admin-token` gate, fails closed) aggregates
   across all sessions via `repo.list_all()`. Persists in the JSONB blob like `usage`. *Deferred:*
-  dashboards/Kafka (P3 #13), per-user analytics. De-risks the Gate-1 "watch real users" checkpoint.
+  dashboards/Kafka (P3 #13), broader per-user analytics. **21 October: per-skill practice history**
+  now shows valid recorded scores and local dates below the lesson/result, newest five first with
+  Show all/Show less. It updates after grading and survives reloads or a cleared lesson cache;
+  diagnostic quizzes and grading-system failures are excluded. No new API, database migration or AI
+  calls. **Verified: 415 backend tests (real database/outage checks, zero skips), 55 browser tests,
+  type checking and a clean isolated production build passed.** Cross-session per-user analytics
+  remains open. De-risks the Gate-1 "watch real users" checkpoint.
 - 🟡 **Cost observability (unit economics)** — `services/cost.py` `TokenMeter` (a LangChain callback
   attached to the lesson-graph invocation in `_run_lesson`) aggregates token usage across all nested
   LLM calls; `estimate_cost` prices it off `MODEL_PRICES` (Groq `openai/gpt-oss-120b` at $0.15/$0.60 per 1M

@@ -217,3 +217,101 @@ body {
   font-size: 0.875rem;
   line-height: 1.6;
 }
+
+/* ── Lesson skeleton loader ────────────────────────────────────────────────
+   Rich shimmer animation that matches the real LessonPanel layout, preventing
+   layout shift during the 15-30s LLM compose wait. */
+
+@keyframes shimmer {
+  0% {
+    background-position: -400px 0;
+  }
+  100% {
+    background-position: 400px 0;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.skeleton-line {
+  background: linear-gradient(
+    90deg,
+    oklch(22% 0.016 270 / 0.6) 0%,
+    oklch(30% 0.018 270 / 0.8) 40%,
+    oklch(22% 0.016 270 / 0.6) 80%
+  );
+  background-size: 800px 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+  border-radius: 6px;
+}
+
+.skeleton-block {
+  background: linear-gradient(
+    90deg,
+    oklch(20% 0.014 270 / 0.5) 0%,
+    oklch(26% 0.016 270 / 0.7) 40%,
+    oklch(20% 0.014 270 / 0.5) 80%
+  );
+  background-size: 800px 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+  border: 1px solid oklch(100% 0 0 / 0.04);
+}
+
+.lesson-skeleton-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid oklch(100% 0 0 / 0.1);
+  border-top-color: var(--color-gold-dim);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.animate-fade-in {
+  animation: fade-in 400ms var(--ease-out-expo) both;
+}
+
+/* ── Follow-up step card transitions ──────────────────────────────────────── */
+
+@keyframes followup-slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(40px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes followup-slide-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-40px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.followup-card-enter {
+  animation-duration: 350ms;
+  animation-timing-function: var(--ease-out-expo);
+  animation-fill-mode: both;
+}
+

@@ -30,6 +30,7 @@ class LearningSessionRow(Base):
     session_id: Mapped[str] = mapped_column(String, primary_key=True)
     # The whole learning_session dict (skill_graph, node_state, lessons, …). Portable JSON dict.
     data: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
     # A short human label for the session list (the original learning query / summary).
     title: Mapped[str] = mapped_column(String, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
@@ -45,6 +46,8 @@ class RagChunkRow(Base):
     # Scope every chunk to the uploading user; retrieval filters on this.
     user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     source: Mapped[str] = mapped_column(String, nullable=False)  # filename, shown as the citation
+    source_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    page: Mapped[int | None] = mapped_column(Integer, nullable=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[list[float]] = mapped_column(Vector(EMBED_DIM), nullable=False)
     created_at: Mapped[datetime] = mapped_column(

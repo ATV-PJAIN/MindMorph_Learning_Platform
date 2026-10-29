@@ -40,18 +40,24 @@ export interface NodeState {
 
 export interface GradingArtifact {
   format?: string;
+  language?: "python" | "javascript" | "sql" | null;
   unit_tests?: string[];
+  sql_assertions?: string[];
   rubric?: { criterion?: string; weight?: number }[];
   instructions?: string;
 }
 
 export interface Exercise {
+  grounding?: GroundingInfo | null;
+  revision?: string;
   format?: "coding_challenge" | "case_study" | null;
+  language?: "python" | "javascript" | "sql" | null;
   statement?: string | null;
   grading_artifact?: GradingArtifact | null;
 }
 
 export interface Lesson {
+  grounding?: GroundingInfo | null;
   content?: string | null;
   exercise?: Exercise;
 }
@@ -72,6 +78,7 @@ export interface GradeResult {
 }
 
 export interface MCQQuestion {
+  id?: string;
   node_id: string;
   question: string;
   options: string[];
@@ -83,12 +90,23 @@ export interface AssessmentQuiz {
   questions: MCQQuestion[];
 }
 
+export interface AssessmentResult {
+  question_id: string;
+  node_id?: string;
+  chosen_index: number;
+  correct_index: number;
+  explanation?: string;
+  is_correct: boolean;
+}
+
 export interface Assessment {
   quiz: AssessmentQuiz;
   submitted: boolean;
+  results?: AssessmentResult[];
 }
 
 export interface ChatMessage {
+  grounding?: GroundingInfo | null;
   role: "user" | "assistant";
   content: string;
 }
@@ -102,11 +120,16 @@ export interface LearningEvent {
 }
 
 export interface LearningSession {
+  grounding?: GroundingInfo | null;
   skill_graph: SkillGraph;
   summary?: string | null;
   review_passed?: boolean | null;
   review_notes?: string | null;
   format_type?: string;
+  domain?: string | null;
+  primary_language?: string | null;
+  scope?: string | null;
+  preferences?: Record<string, string> | null;
   node_state: Record<string, NodeState>;
   lessons: Record<string, Lesson>;
   selected_node?: string | null;
@@ -122,6 +145,7 @@ export interface SessionMeta {
 }
 
 export interface StartSessionResponse {
+  grounding?: GroundingInfo | null;
   route: string;
   session_id?: string | null;
   learning_session?: LearningSession | null;
@@ -141,7 +165,41 @@ export interface SessionResponse {
   grade_result?: GradeResult | null;
 }
 
+export interface FollowUpQuestion {
+  id: string;
+  question: string;
+  options: string[];
+  default: number;
+}
+
+export interface FollowUpResponse {
+  questions: FollowUpQuestion[];
+  detected_domain: string;
+  detected_language: string | null;
+  detected_specialization: string | null;
+}
+
 export interface IngestResponse {
   filename: string;
   chunks: number;
+}
+
+export interface GroundingPassage {
+  id: string;
+  text: string;
+  source: string;
+  kind: "personal" | "shared" | "web_snippet" | "web_page";
+  source_id?: string | null;
+  page?: number | null;
+  url?: string | null;
+  score: number;
+}
+
+export interface GroundingInfo {
+  status: "grounded" | "insufficient" | "disabled" | "unavailable";
+  passages: GroundingPassage[];
+  sources: Record<string, string>;
+  warnings: string[];
+  elapsed_ms: number;
+  candidate_count: number;
 }

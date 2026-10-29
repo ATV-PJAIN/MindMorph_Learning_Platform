@@ -188,7 +188,7 @@ def test_broken_harness_end_to_end_leaves_the_learner_untouched(monkeypatch):
                         lambda ls, nid: adapt_calls.__setitem__("n", adapt_calls["n"] + 1) or [])
     ls = _opened_with_artifact(monkeypatch, _BROKEN_TESTS)
 
-    ls, new_ids, result = svc.grade(ls, "a", "def prepare_and_fit(**kw):\n    return 1\n")
+    ls, new_ids, result = svc.grade(ls, "a", "def prepare_and_fit(**kw):\n    return 1\n", exercise_revision=ls["lessons"]["a"]["exercise"]["revision"])
 
     assert result["harness_error"] is True
     state = ls["node_state"]["a"]
@@ -210,7 +210,7 @@ def test_wrong_submission_against_valid_artifact_still_remediates(monkeypatch):
                         lambda ls, nid: adapt_calls.__setitem__("n", adapt_calls["n"] + 1) or [])
     ls = _opened_with_artifact(monkeypatch, _VALID_TESTS)
 
-    ls, _new_ids, result = svc.grade(ls, "a", _WRONG_SOLUTION)
+    ls, _new_ids, result = svc.grade(ls, "a", _WRONG_SOLUTION, exercise_revision=ls["lessons"]["a"]["exercise"]["revision"])
 
     assert result.get("harness_error") is not True
     assert result["score"] < 40

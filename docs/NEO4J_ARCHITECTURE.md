@@ -1,5 +1,34 @@
 # Neo4j Graph Architecture — MindMorph
 
+> **Current P1 #7 behavior:** saved sessions are authoritative for prerequisites, mastery and
+> completion. Neo4j is a session-owned mirror, not the completion engine or a lesson bank.
+> Grounded paths bypass the shared roadmap caches and disable persisted execution checkpoints.
+> See [GROUNDING.md](GROUNDING.md). The original phase notes below describe the legacy design.
+
+## Current session-owned representation
+
+`persistence/private_graph.py` writes `LearningGraph` → `SessionSkill` and `SessionProgress`
+snapshots after successful session saves. A graph key derives from caller/session identity;
+skills are unique within that graph. Transactions replace only owned nodes/edges, reject stale
+revisions under a write lock, and publish completeness last. Failure leaves the prior snapshot
+intact and cannot change session-derived locks. Old `Topic`/`Skill` data is preserved.
+
+Inspect the new representation using the locally configured Neo4j Browser and credentials:
+
+```cypher
+MATCH (g:LearningGraph)-[:HAS_SKILL]->(s:SessionSkill)
+OPTIONAL MATCH (s)-[r:PREREQUISITE]->(next:SessionSkill {graph_key: s.graph_key})
+RETURN g, s, r, next
+```
+
+```cypher
+MATCH (g:LearningGraph)-[:HAS_PROGRESS]->(p:SessionProgress)-[:FOR_SKILL]->(s:SessionSkill)
+RETURN g.key AS graph, g.revision AS revision, g.complete AS complete,
+       s.id AS skill, p.status AS status, p.best_score AS score
+```
+
+## Legacy phase notes
+
 MindMorph has successfully migrated its backend data layer from a JSONB Postgres cache into a fully Graph-Native architecture powered by Neo4j. This document outlines what was implemented, how the system works under the hood, and how developers can test the graph behavior directly using Cypher queries.
 
 ## What Was Implemented
@@ -37,12 +66,12 @@ To run the full MindMorph architecture locally, ensure you have Docker and your 
 
 2. **Run Migrations:**
    ```bash
-   conda run -n mm alembic upgrade head
+   conda run -n mindmorph alembic upgrade head
    ```
 
 3. **Start the API and Web App:**
    ```bash
-   conda run -n mm uvicorn api.main:app --port 8000 --reload
+   conda run -n mindmorph uvicorn api.main:app --port 8000 --reload
    # In a separate terminal:
    cd web && npm run dev
    ```
@@ -56,7 +85,7 @@ You can directly inspect how MindMorph builds your knowledge graph using the Neo
 **Access the Browser:** 
 Navigate to `http://localhost:7474`
 - Username: `neo4j`
-- Password: `password`
+- Password: use the credentials configured in your local `.env`.
 
 ### 1. View a Full Topic Graph
 After searching for a topic (e.g., "Python Basics") in the UI, run this to see the generated knowledge graph:

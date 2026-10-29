@@ -41,6 +41,7 @@ type SkillNodeData = {
   selected: boolean;
   isNew: boolean;
   enterDelayMs: number;
+  isStartHere?: boolean;
   // The latest `onOpen` from the owning SkillGraph instance, read (never written) inside the node's
   // own keydown handler — a ref so the click-through path stays identical to mouse activation
   // (`onNodeClick` below) without this node's `data` needing a fresh closure every render.
@@ -56,7 +57,7 @@ function SkillFlowNode({ id, data }: NodeProps<Node<SkillNodeData>>) {
   const style = STATUS_STYLE[data.status];
   // Accessible name folds in status (and, if locked, the reason) so a screen reader user gets the
   // same information the glyph + dimming + 🔒 convey visually — never a colour/opacity-only signal.
-  const accessibleName = `${data.label}. ${style.label}${data.locked && data.lockedReason ? `. Requires: ${data.lockedReason}` : ""}`;
+  const accessibleName = `${data.isStartHere ? "Start Here. " : ""}${data.label}. ${style.label}${data.locked && data.lockedReason ? `. Requires: ${data.lockedReason}` : ""}`;
 
   return (
     <div
@@ -67,12 +68,18 @@ function SkillFlowNode({ id, data }: NodeProps<Node<SkillNodeData>>) {
         // `--color-blocked`, raised alongside this so the pair clears 4.5:1 while staying visibly
         // dimmed relative to an unlocked card.
         opacity: data.locked ? 0.7 : 1,
-        borderColor: data.selected ? "var(--color-gold)" : undefined,
+        borderColor: data.selected
+          ? "var(--color-gold)"
+          : data.isStartHere
+          ? "var(--color-gold)"
+          : undefined,
         boxShadow: data.selected
           ? "0 0 0 1px var(--color-gold), 0 0 28px -6px var(--color-gold)"
+          : data.isStartHere
+          ? "0 0 0 1px var(--color-gold), 0 0 22px -4px var(--color-gold)"
           : data.status === "mastered"
-            ? `0 0 24px -8px ${style.color}`
-            : undefined,
+          ? `0 0 24px -8px ${style.color}`
+          : undefined,
         cursor: data.locked ? "not-allowed" : "pointer",
         ...(data.isNew
           ? { animationDelay: `${data.enterDelayMs}ms, ${data.enterDelayMs + ENTER_DURATION_MS}ms` }
@@ -93,6 +100,17 @@ function SkillFlowNode({ id, data }: NodeProps<Node<SkillNodeData>>) {
         }
       }}
     >
+      {data.isStartHere && (
+        <span
+          className="absolute -top-3 left-4 z-10 flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[10px] font-bold tracking-wider shadow-lg"
+          style={{
+            background: "var(--color-gold)",
+            color: "#0f172a",
+          }}
+        >
+          <span>👉</span> START HERE
+        </span>
+      )}
       <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
       <div className="flex items-center gap-2">
         <span
@@ -175,6 +193,16 @@ export function SkillGraph({
     // Edge-aware layered layout (dagre): position by the prereq DAG, so remedial prerequisite nodes
     // added mid-session render left of the node they unlock and the graph reflows automatically.
     const { positions } = layoutSkillGraph(graph.nodes, graphEdges);
+
+    // Identify the "Start Here" node: the primary root unlocked node that is not yet mastered.
+    const incomingEdgeTargets = new Set(graphEdges.map((e) => e.target));
+    const startCandidates = graph.nodes.filter(
+      (n) => !locked.has(n.id) && status[n.id] !== "mastered"
+    );
+    const startNode =
+      startCandidates.find((n) => !incomingEdgeTargets.has(n.id)) || startCandidates[0];
+    const startNodeId = startNode ? startNode.id : null;
+
     const rfNodes: Node<SkillNodeData>[] = graph.nodes.map((n) => {
       return {
         id: n.id,
@@ -190,6 +218,7 @@ export function SkillGraph({
           selected: session.selected_node === n.id,
           isNew: enterDelayByNode.has(n.id),
           enterDelayMs: enterDelayByNode.get(n.id) ?? 0,
+          isStartHere: startNodeId === n.id,
           onOpenRef,
         },
       };

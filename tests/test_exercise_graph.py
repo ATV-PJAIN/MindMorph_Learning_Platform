@@ -32,7 +32,7 @@ def _mock_grader(artifact_dict):
 
 async def test_coding_challenge_flow():
     format_selector = MagicMock()
-    format_selector.select_format.return_value = MagicMock(format="coding_challenge", reasoning="hands-on")
+    format_selector.select_format.return_value = MagicMock(format="coding_challenge", reasoning="hands-on", language="python")
     synthesizer = MagicMock()
     synthesizer.synthesize.return_value = "EXERCISE_STATEMENT"
     grader = _mock_grader(
@@ -62,6 +62,7 @@ async def test_coding_challenge_flow():
     synthesizer.synthesize.assert_called_once_with(
         "recursion in Python",
         "coding_challenge",
+        exercise_language="python",
         github_material="GH_REPOS",
         blog_material="BLOG_TUTORIALS",
         dataset_material="DATASET_LINKS",
@@ -72,7 +73,7 @@ async def test_coding_challenge_flow():
 
 async def test_case_study_flow():
     format_selector = MagicMock()
-    format_selector.select_format.return_value = MagicMock(format="case_study", reasoning="analytical")
+    format_selector.select_format.return_value = MagicMock(format="case_study", reasoning="analytical", language=None)
     synthesizer = MagicMock()
     synthesizer.synthesize.return_value = "CASE_STUDY_STATEMENT"
     grader = _mock_grader(

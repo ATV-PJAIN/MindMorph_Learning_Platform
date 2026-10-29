@@ -190,15 +190,14 @@ async def test_missing_token_in_situ_names_the_env_var(monkeypatch, caplog):
 
 
 @pytest.mark.asyncio
-async def test_exercise_graph_grounding_failure_is_also_logged(monkeypatch, caplog):
-    """The commit's stated reason for fixing at the client layer: exercise_graph.py is a second
-    caller that emitted no grounding telemetry. It defaults to the same _fetch_github_repos, so its
-    failures must now be visible too."""
+async def test_exercise_graph_grounding_failure_is_reported_without_blocking_generation(monkeypatch, caplog):
+    """A failed shared evidence source stays visible without blocking valid practice generation."""
     monkeypatch.setenv("GITHUB_PERSONAL_TOKEN", "")
+    monkeypatch.setattr("rag.registry.get_user_store", MagicMock(side_effect=RuntimeError("unavailable")))
     from graph.exercise_graph import build_exercise_graph
 
     format_selector = MagicMock()
-    format_selector.select_format.return_value = MagicMock(format="coding_challenge", reasoning="r")
+    format_selector.select_format.return_value = MagicMock(format="coding_challenge", reasoning="r", language="python")
     synthesizer = MagicMock()
     synthesizer.synthesize.return_value = "EXERCISE_STATEMENT"
     grader = MagicMock()
@@ -211,9 +210,10 @@ async def test_exercise_graph_grounding_failure_is_also_logged(monkeypatch, capl
 
     g = build_exercise_graph(format_selector=format_selector, synthesizer=synthesizer, grader=grader)
     with caplog.at_level(logging.WARNING):
-        state = await g.ainvoke({"user_query": "practice rust"})
+        state = await g.ainvoke({"user_query": "practice rust", "user_id": "exercise-user"})
 
-    assert any("GITHUB_PERSONAL_TOKEN is not set" in r.getMessage() for r in caplog.records), caplog.text
+    assert state["grounding"]["status"] == "unavailable"
+    assert "personal_unavailable" in state["grounding"]["warnings"]
     assert state["exercise_statement"] == "EXERCISE_STATEMENT"
 
 
@@ -240,7 +240,7 @@ async def test_zero_job_items_warns_loudly_and_consensus_proceeds(monkeypatch, c
     assert "Academic + Practical only" in msg                    # names what it was built from
     # Consensus still ran, from two of three perspectives, and the session is intact.
     consensus.build_skill_graph.assert_called_once_with(
-        "learn ML", "ACADEMIC_RESULT", None, "PRACTICAL_RESULT"
+        "learn ML", "ACADEMIC_RESULT", None, "PRACTICAL_RESULT", scope_instruction=""
     )
     assert state["market_output"] is None
     assert state["skill_graph"]["summary"] == "roadmap"

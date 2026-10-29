@@ -8,6 +8,9 @@ __pycache__/
 logs/
 *.log
 
+# Isolated Next.js verification builds
+web/.next-*/
+
 # Source design PDFs (kept local, not committed)
 *.pdf
 
@@ -27,3 +30,11 @@ docs/archive/source-pdfs/
 
 # Playwright scratch drivers used for live capture runs
 web/.live_e2e*.mjs
+
+# Code audit & onboarding doc (local, untracked)
+CODE_AUDIT.md
+
+# Local-only work records
+/CODE_AUDIT_2.md
+/RESOURCES_AND_WORKFLOW.md
+/CHANGES.md

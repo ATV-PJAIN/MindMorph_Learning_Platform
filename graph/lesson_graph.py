@@ -34,11 +34,16 @@ class LessonState(TypedDict, total=False):
     prior_weaknesses: Optional[list]  # list[str] gap topics from a prior failed attempt
     user_id: Optional[str]            # for per-user RAG retrieval in the content sub-graph
     path_context: Optional[str]       # overall goal — keeps the lesson in the path's language
+    learner_profile: Optional[dict]
+    primary_language: Optional[str]
+    public_query: Optional[str]
+    grounding: Optional[dict]
     # Derived.
     skill_query: str
     # Outputs.
     content: Optional[str]
     exercise_format: Optional[str]
+    exercise_language: Optional[str]   # 'python' | 'javascript' | 'sql'
     exercise_statement: Optional[str]
     grading_artifact: Optional[dict]
 
@@ -73,21 +78,35 @@ def build_lesson_graph(content_graph: Optional[Any] = None, exercise_graph: Opti
                     "format_type": state.get("format_type", "B"),
                     "prior_feedback": prior_feedback,
                     "user_id": state.get("user_id"),
+                    "public_query": state.get("public_query"),
                     "path_context": state.get("path_context"),
+                    "primary_language": state.get("primary_language"),
+                    "learner_profile": state.get("learner_profile"),
                 }
             )
-        return {"skill_query": skill_query, "content": out.get("final_content")}
+        return {"skill_query": skill_query, "content": out.get("final_content"),
+                "grounding": out.get("grounding")}
 
     async def exercise_node(state: LessonState) -> dict:
         # Reuse the skill_query the content node already derived (falls back if absent).
         skill_query = state.get("skill_query") or _skill_query(state)
         logger.info("Lesson: composing exercise for skill %r", skill_query)
         with span("lesson.exercise"):
-            out = await exercise_graph.ainvoke({"user_query": skill_query})
+            out = await exercise_graph.ainvoke({
+                "user_query": skill_query,
+                "primary_language": state.get("primary_language"),
+                "learner_profile": state.get("learner_profile"),
+                "user_id": state.get("user_id"),
+                "public_query": state.get("public_query"),
+                "grounding": state.get("grounding"),
+                "lesson_content": state.get("content"),
+            })
         return {
             "exercise_format": out.get("exercise_format"),
+            "exercise_language": out.get("exercise_language"),
             "exercise_statement": out.get("exercise_statement"),
             "grading_artifact": out.get("grading_artifact"),
+            "grounding": out.get("grounding") or state.get("grounding"),
         }
 
     g = StateGraph(LessonState)

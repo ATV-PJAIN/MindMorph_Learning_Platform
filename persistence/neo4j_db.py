@@ -12,7 +12,8 @@ def get_driver() -> Driver:
         uri      = os.getenv("NEO4J_URI",      "bolt://localhost:7687")
         user     = os.getenv("NEO4J_USER",     "neo4j")
         password = os.getenv("NEO4J_PASSWORD", "mindmorph_neo4j")
-        _driver  = GraphDatabase.driver(uri, auth=(user, password))
+        _driver = GraphDatabase.driver(uri, auth=(user, password), connection_timeout=3,
+                                       connection_acquisition_timeout=5, max_transaction_retry_time=3)
     return _driver
 
 

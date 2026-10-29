@@ -5,19 +5,51 @@ on:
     branches: [main]   # branch pushes are covered by the pull_request event; this avoids double runs
   pull_request:
 
-# Both suites are hermetic by design: no LLM key, no Ollama daemon, no Postgres, no network.
+# Unit/browser suites are hermetic. The postgres job explicitly verifies a disposable real database.
 # The env below asserts that on purpose — a regression that reaches for a real service fails here
 # instead of passing quietly on a developer machine that happens to have one running.
 env:
   GROQ_API_KEYS: ""                          # hosted lane off; app falls back to local Ollama
   MINDMORPH_OLLAMA_HOST: http://127.0.0.1:1  # closed loopback port: refuses instantly, never hangs
+  MINDMORPH_LLM_PROVIDER: ollama
   MINDMORPH_STORE: memory                    # in-memory repository, no DB
-  # DATABASE_URL left unset. config.py defaults to localhost:5432, which refuses immediately, so the
-  # two Postgres-gated test modules skip at collection without stalling.
+  MINDMORPH_WEB_RESEARCH: "0"
+  MINDMORPH_RERANK: "0"
+  MINDMORPH_NEO4J_MIRROR: "0"
+  KAFKA_BOOTSTRAP_SERVERS: ""
+  # Explicitly bound the DB-gated collection checks on both Windows and Linux.
+  DATABASE_URL: postgresql+psycopg://mindmorph:mindmorph@127.0.0.1:1/mindmorph?connect_timeout=2
+  PGCONNECT_TIMEOUT: "2"
+  LANGSMITH_TRACING: "false"
+  LANGCHAIN_TRACING_V2: "false"
 
 jobs:
   pytest:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      # Backend grading tests execute real JavaScript, including promise/timeout behavior.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: pip install -r requirements.txt
+      - run: pytest -q
+
+  postgres:
     runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql+psycopg://mindmorph:mindmorph@127.0.0.1:5432/mindmorph?connect_timeout=3
+      MINDMORPH_STORE: postgres
+      MINDMORPH_REQUIRE_DB_TESTS: "1"
+      MINDMORPH_TEST_DB_CONTAINER: mindmorph-remaining-tests-ci
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,7 +57,18 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: pytest -q
+      - name: Start disposable PostgreSQL with pgvector
+        run: |
+          docker run -d --name mindmorph-remaining-tests-ci -e POSTGRES_USER=mindmorph -e POSTGRES_PASSWORD=mindmorph -e POSTGRES_DB=mindmorph -p 127.0.0.1:5432:5432 pgvector/pgvector:pg16
+          for attempt in $(seq 1 30); do
+            if docker exec mindmorph-remaining-tests-ci pg_isready -U mindmorph; then exit 0; fi
+            sleep 1
+          done
+          exit 1
+      - run: python -m alembic upgrade head
+      - run: pytest tests/test_repository_postgres.py tests/test_rag_pgvector.py tests/test_grounding_storage.py -q
+      - if: always()
+        run: docker rm -f mindmorph-remaining-tests-ci
 
   e2e:
     runs-on: ubuntu-latest
@@ -40,6 +83,8 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
       - run: npx playwright install --with-deps chromium
       # playwright.config.ts starts `npm run dev` itself; Next compiles routes on demand, and a cold
       # compile costs ~12s locally and more on a shared runner. --timeout raises the per-test budget

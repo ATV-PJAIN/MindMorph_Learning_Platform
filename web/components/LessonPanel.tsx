@@ -9,6 +9,7 @@ import { CodeEditor } from "./CodeEditor";
 import { GradeResult } from "./GradeResult";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { Sandbox } from "./Sandbox";
+import { EvidenceSources, citedText } from "./EvidenceSources";
 import type { LearningSession } from "@/lib/types";
 
 // rehype-highlight runs before these component overrides and only colorizes languages it
@@ -50,7 +51,10 @@ export function LessonPanel({
   if (!lesson) return null;
   const exercise = lesson.exercise;
   const isCoding = (exercise?.format ?? "coding_challenge") === "coding_challenge";
-  const lastFeedback = session.node_state[nodeId]?.last_feedback ?? null;
+  const exerciseLanguage = exercise?.language ?? exercise?.grading_artifact?.language ?? "python";
+  const nodeState = session.node_state[nodeId];
+  // Only display grade result if the learner has actually submitted a solution attempt
+  const lastFeedback = (nodeState?.attempts ?? 0) > 0 ? (nodeState?.last_feedback ?? null) : null;
   // Already flagged? Derived from the funnel timeline so it persists across reloads.
   const flagged = (session.events ?? []).some(
     (e) => e.stage === "content_flagged" && e.node_id === nodeId,
@@ -68,12 +72,14 @@ export function LessonPanel({
             rehypePlugins={rehypeHighlightPlugins}
             components={markdownComponents}
           >
-            {lesson.content}
+            {citedText(lesson.content, lesson.grounding)}
           </ReactMarkdown>
         ) : (
           <p className="text-text-muted">Lesson content could not be generated.</p>
         )}
       </div>
+
+      <EvidenceSources evidence={lesson.grounding} />
 
       {/* Explicit content-quality signal (Gate-1): the direct "was this lesson wrong?" measure. */}
       {onFlag && (
@@ -106,18 +112,19 @@ export function LessonPanel({
           </div>
 
           <div className="prose prose-invert lesson-prose max-w-none">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{exercise.statement}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{citedText(exercise.statement, exercise.grounding ?? lesson.grounding)}</ReactMarkdown>
           </div>
+          <EvidenceSources evidence={exercise.grounding ?? lesson.grounding} />
 
           <div className="mt-6">
             {isCoding ? (
-              <CodeEditor value={solution} onChange={setSolution} />
+              <CodeEditor value={solution} onChange={setSolution} language={exerciseLanguage} />
             ) : (
               <textarea
                 value={solution}
                 onChange={(e) => setSolution(e.target.value)}
-                placeholder="Your analysis…"
-                aria-label="Your analysis"
+                placeholder="Your solution, response, or analysis…"
+                aria-label="Your response"
                 className="accent-ring h-48 w-full rounded-xl border border-white/10 bg-ink-900 p-4 text-text-strong"
               />
             )}

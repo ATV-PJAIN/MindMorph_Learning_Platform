@@ -7,6 +7,7 @@ unchanged. Swap the store for pgvector later (Postgres is already in the stack) 
 import logging
 import os
 from pathlib import Path
+from threading import RLock
 from typing import List, Optional
 
 from langchain_core.embeddings import Embeddings
@@ -21,7 +22,10 @@ KNOWLEDGE_EXTENSIONS = (".md", ".txt")
 
 def _chunk_text(text: str, max_chars: int = MAX_CHUNK_CHARS) -> List[str]:
     """Split on blank lines, then pack paragraphs into chunks capped at ``max_chars``."""
-    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    if max_chars < 1:
+        raise ValueError("Chunk size must be positive")
+    paragraphs = [p.strip()[i:i + max_chars] for p in text.split("\n\n") if p.strip()
+                  for i in range(0, len(p.strip()), max_chars)]
     chunks: List[str] = []
     buf = ""
     for para in paragraphs:
@@ -41,13 +45,34 @@ class RagStore:
     def __init__(self, embeddings: Embeddings):
         self._vs = InMemoryVectorStore(embeddings)
         self._count = 0
+        self._lock = RLock()
 
     def add_texts(self, texts: List[str], metadatas: Optional[List[dict]] = None) -> None:
-        texts = [t for t in texts if t and t.strip()]
+        if metadatas is not None and len(metadatas) != len(texts):
+            raise ValueError("Passage metadata count does not match text count")
+        pairs = [(t, m) for t, m in zip(texts, metadatas or [{} for _ in texts]) if t and t.strip()]
+        texts = [t for t, _ in pairs]
         if not texts:
             return
-        self._vs.add_texts(texts, metadatas=metadatas)
-        self._count += len(texts)
+        with self._lock:
+            self._vs.add_texts(texts, metadatas=[m for _, m in pairs])
+            self._count += len(texts)
+
+    def search(self, query: str, k: int = DEFAULT_K, source_ids: Optional[list[str]] = None) -> list[dict]:
+        """Scored passages; an explicit empty selection never broadens to all material."""
+        if not query.strip() or self.is_empty or source_ids == []:
+            return []
+        allowed = set(source_ids) if source_ids is not None else None
+        with self._lock:
+            matches = self._vs.similarity_search_with_score(
+                query, k=min(max(k, 0), 20),
+                filter=(lambda d: (d.metadata or {}).get("source_id") in allowed) if allowed is not None else None,
+            )
+        return [{"id": "p_" + str(doc.id), "text": doc.page_content,
+                 "source": (doc.metadata or {}).get("source", "knowledge base"),
+                 "source_id": (doc.metadata or {}).get("source_id"),
+                 "page": (doc.metadata or {}).get("page"), "score": float(score)}
+                for doc, score in matches]
 
     @property
     def is_empty(self) -> bool:
@@ -58,7 +83,7 @@ class RagStore:
         if not query or not query.strip() or self.is_empty:
             return None
         try:
-            docs = self._vs.similarity_search(query, k=k)
+            docs = self.search(query, k)
         except Exception:
             logger.exception("RAG: retrieval failed for %r", query)
             return None
@@ -66,8 +91,7 @@ class RagStore:
             return None
         blocks = []
         for d in docs:
-            src = (d.metadata or {}).get("source", "knowledge base")
-            blocks.append(f"- {d.page_content}\n  Source: {src}")
+            blocks.append(f"- {d['text']}\n  Source: {d['source']}")
         return "\n".join(blocks)
 
     @classmethod

@@ -1,5 +1,32 @@
 # MindMorph Learning Platform — QA / End-to-End Test Plan
 
+> **P1 #7 update (27 October 2026):** use [GROUNDING.md](GROUNDING.md) for current evidence,
+> graph/cache, migration and privacy contracts. Session state enforces locks; Neo4j mirrors
+> session-owned snapshots. Structured grounding statuses and aggregate telemetry replace reliance
+> on raw query/source/provider log text during private generation. Historical diagnostics below
+> may describe legacy-only paths.
+
+## Grounding regression checks
+
+- Create a path with a relevant native-text PDF, without uploads, and with an unrelated PDF.
+  Relevant material may enter evidence; unrelated material must be excluded; every case still has
+  a usable goal/profile-based path. Compare actual supplied evidence, not random wording/node counts.
+- Upload after creating a path or saving a lesson. Future generation may use it; roadmap, mastery,
+  saved exercise/content, revision and practice history remain intact. Reopening reuses saved content.
+- Confirm new lesson/practice share one bundle and practice uses taught context. Tutor fresh retrieval
+  includes the selected skill; its public query never contains a private passage/question/filename.
+- Check page/source/snippet labels, disabled/unavailable/no-match states, historical unknown sources,
+  fabricated citations, split streamed references and cancellation/recovery. Check keyboard/mobile
+  source disclosure and saved tutor sources after refetch.
+- Use `scripts/verify_grounding_storage.py` for disposable migration/isolation/restart/outage,
+  atomic graph rollback/stale revision and 100,000-passage/ten-search capacity evidence. Never point
+  destructive legacy graph tests at an application database. Do not substitute table creation for migrations.
+- Use `scripts/evaluate_grounding.py` for labelled real local-model samples and
+  `scripts/smoke_grounding.py` for synthetic live configured-generation checks. The latter uses
+  short Boost lessons with the optional rich-content tail off and deliberately unavailable market
+  scraping to bound calls; it does not change production defaults or the running app's data.
+
+
 **Audience:** QA / Testing team
 **Scope:** Everything implemented to date — the multi-agent learning prototype and the adaptive
 learning loop.

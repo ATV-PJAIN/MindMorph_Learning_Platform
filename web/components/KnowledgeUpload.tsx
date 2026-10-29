@@ -32,7 +32,8 @@ export function KnowledgeUpload({ userId }: KnowledgeUploadProps) {
       </div>
       <p className="mt-2 max-w-xl text-sm text-text-muted">
         Upload notes, papers, or docs. MindMorph indexes them and weaves the relevant passages into the
-        lessons it generates for you.
+        new paths, lessons and practice it generates for you. Uploads are optional. Your existing path
+        and saved lessons stay as they are.
       </p>
 
       <form
@@ -75,7 +76,7 @@ export function KnowledgeUpload({ userId }: KnowledgeUploadProps) {
       </div>
       {done && (
         <p role="status" className="mt-3 text-sm" style={{ color: "var(--color-gold)" }}>
-          Indexed {done.chunks} passage{done.chunks === 1 ? "" : "s"} from {done.filename}.
+          Indexed {done.chunks} passage{done.chunks === 1 ? "" : "s"} from {done.filename}. Available for future generation. Text PDFs only; scanned pages need OCR and are not indexed.
         </p>
       )}
       {upload.isError && (

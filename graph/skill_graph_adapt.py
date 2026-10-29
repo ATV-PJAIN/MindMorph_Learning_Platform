@@ -146,6 +146,8 @@ def apply_adaptation(
         )
 
     new_graph = {**graph, "nodes": merged_nodes, "edges": merged_edges}
+    from graph.validation import validate_skill_graph
+    validate_skill_graph(new_graph)
     return new_graph, new_node_ids
 
 

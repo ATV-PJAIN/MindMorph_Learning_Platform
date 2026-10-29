@@ -52,7 +52,7 @@ def client(monkeypatch):
     # start_session returns a SCOUT result with a fresh learning_session (no orchestration graph).
     monkeypatch.setattr(
         routes, "start_session",
-        lambda query, fmt: {"route": "SCOUT", "learning_session": _scout_ls(),
+        lambda query, fmt="B", **kwargs: {"route": "SCOUT", "learning_session": _scout_ls(),
                             "final_content": None, "exercise": None},
     )
 
@@ -103,7 +103,7 @@ def test_create_session_stream_emits_stages_then_terminal_frame(client, monkeypa
     """The streaming create route must emit one frame per LangGraph node (in order) before the
     terminal frame — the whole point being live progress instead of one static ~60s wait."""
 
-    async def fake_astream_session(query, fmt):
+    async def fake_astream_session(query, fmt, **kwargs):
         yield {"stage": "scout", "label": "Scout planning specialist queries"}
         yield {"stage": "academic", "label": "Academic agent researching"}
         yield {"stage": "consensus", "label": "Building consensus skill graph"}
@@ -139,7 +139,7 @@ def test_create_session_stream_surfaces_mid_stream_failure_as_error_frame(client
     """A mid-stream LLM/graph failure must arrive as an explicit error frame, never a stream that
     just stops with the client's spinner running forever."""
 
-    async def fake_astream_session(query, fmt):
+    async def fake_astream_session(query, fmt, **kwargs):
         yield {"stage": "scout", "label": "Scout planning specialist queries"}
         raise RuntimeError("llm provider 500: internal boom")
 
@@ -244,7 +244,7 @@ def test_grade_sub40_adds_remedial_node_and_locks_via_http(monkeypatch):
 
     monkeypatch.setattr(
         routes, "start_session",
-        lambda query, fmt: {"route": "SCOUT", "learning_session": _scout_ls(),
+        lambda query, fmt="B", **kwargs: {"route": "SCOUT", "learning_session": _scout_ls(),
                             "final_content": None, "exercise": None},
     )
     # Stub the lesson-compose LLM boundary only; open_lesson/grade themselves run for real.
@@ -271,9 +271,10 @@ def test_grade_sub40_adds_remedial_node_and_locks_via_http(monkeypatch):
 
     client = TestClient(app)
     sid = client.post("/sessions", json={"user_id": "u1", "query": "p"}).json()["session_id"]
-    assert client.post(f"/sessions/u1/{sid}/lessons/a").status_code == 200
+    opened = client.post(f"/sessions/u1/{sid}/lessons/a")
+    assert opened.status_code == 200
 
-    g = client.post(f"/sessions/u1/{sid}/grade", params={"node_id": "a"}, json={"solution": "bad code"})
+    g = client.post(f"/sessions/u1/{sid}/grade", params={"node_id": "a"}, json={"solution": "bad code", "exercise_revision": opened.json()["learning_session"]["lessons"]["a"]["exercise"]["revision"]})
     assert g.status_code == 200
     body = g.json()
     assert body["new_node_ids"] == ["a_basics"]

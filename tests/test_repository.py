@@ -9,6 +9,7 @@ if ROOT not in sys.path:
     sys.path.append(ROOT)
 
 import pytest
+from datetime import datetime, timezone
 
 from persistence.repository import InMemoryLearningSessionRepository
 
@@ -40,14 +41,18 @@ def test_get_missing_returns_none(repo):
 
 def test_save_upserts_data(repo):
     repo.save("u1", "s1", _ls("v1"), title="Learn X")
-    repo.save("u1", "s1", _ls("v2"))  # overwrite, no title
+    updated = repo.get("u1", "s1")
+    updated.update(_ls("v2"))
+    repo.save("u1", "s1", updated)  # overwrite, no title
     got = repo.get("u1", "s1")
     assert got["skill_graph"]["summary"] == "v2"
 
 
 def test_upsert_without_title_preserves_existing_title(repo):
     repo.save("u1", "s1", _ls(), title="Original")
-    repo.save("u1", "s1", _ls("v2"))  # no title supplied
+    updated = repo.get("u1", "s1")
+    updated.update(_ls("v2"))
+    repo.save("u1", "s1", updated)  # no title supplied
     meta = repo.list_sessions("u1")
     assert meta[0]["title"] == "Original"
 
@@ -82,6 +87,23 @@ def test_list_sessions_scoped_per_user_recent_first(repo):
     metas = repo.list_sessions("u1")
     assert {m["session_id"] for m in metas} == {"s1", "s2"}
     assert metas[0]["session_id"] == "s2"  # most-recently-saved first
+
+
+def test_list_sessions_order_is_deterministic_when_timestamps_tie(repo, monkeypatch):
+    from persistence import repository as repository_module
+
+    fixed = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    monkeypatch.setattr(repository_module, "datetime", type("FixedDateTime", (), {
+        "now": staticmethod(lambda _tz=None: fixed),
+    }))
+    repo.save("u1", "s1", _ls())
+    repo.save("u1", "s2", _ls())
+    assert [m["session_id"] for m in repo.list_sessions("u1")] == ["s2", "s1"]
+    updated = repo.get("u1", "s1")
+    updated.update(_ls("resaved"))
+    repo.save("u1", "s1", updated)
+    assert [m["session_id"] for m in repo.list_sessions("u1")] == ["s1", "s2"]
+    assert all(m["updated_at"] == fixed.isoformat() for m in repo.list_sessions("u1"))
 
 
 def test_delete_removes_session(repo):

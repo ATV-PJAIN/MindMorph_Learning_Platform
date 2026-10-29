@@ -27,6 +27,8 @@ async function mockApi(
   page: Page,
   opts: {
     injectRemedial?: boolean;
+    language?: "python" | "javascript" | "sql";
+    harnessError?: boolean;
     // Reviewer verdict as the backend serializes it. `undefined` = key absent from the payload
     // (older sessions); `null` = Reviewer ran but returned no verdict. Both must render nothing.
     review?: { passed?: boolean | null; notes?: string | null };
@@ -44,6 +46,7 @@ async function mockApi(
   }
 
   await page.route("**/sessions/*", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
     // GET /sessions/{user} → list
     return route.fulfill({ json: [{ session_id: sid, title: "Learn Python", updated_at: null }] });
   });
@@ -53,12 +56,14 @@ async function mockApi(
   });
 
   await page.route(`**/sessions/*/${sid}/lessons/a`, async (route) => {
+    const language = opts.language ?? "python";
     ls.lessons.a = {
       content: "# Python Basics\nVariables hold values.",
       exercise: {
         format: "coding_challenge",
+        language,
         statement: "Write `add(a, b)`.",
-        grading_artifact: { format: "coding_challenge", unit_tests: [] },
+        grading_artifact: { format: "coding_challenge", language, unit_tests: [] },
       },
     };
     ls.selected_node = "a";
@@ -70,6 +75,15 @@ async function mockApi(
   });
 
   await page.route(`**/sessions/*/${sid}/grade**`, async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    if (opts.harnessError) {
+      return route.fulfill({ json: {
+        session_id: sid,
+        learning_session: ls,
+        grade_result: { harness_error: true, failures: ["ModuleNotFoundError: test fixture"] },
+        new_node_ids: [],
+      } });
+    }
     ls.node_state.a = { ...ls.node_state.a, status: "mastered", best_score: 100, attempts: 1,
       last_feedback: { score: 100, passed: 1, total: 1 } };
     // Simulate an LLM adaptation inserting a remedial prerequisite node mid-session — only for the
@@ -79,12 +93,31 @@ async function mockApi(
       ls.skill_graph.edges.push({ source: "c", target: "b", relation: "prerequisite" });
       ls.node_state.c = { status: "available", best_score: 0, attempts: 0, weaknesses: [], last_feedback: null };
     }
-    return route.fulfill({ json: { session_id: sid, learning_session: ls } });
+    return route.fulfill({ json: {
+      session_id: sid,
+      learning_session: ls,
+      grade_result: { score: 100, passed: 1, total: 1, feedback: "All checks passed." },
+      new_node_ids: injectRemedial ? ["c"] : [],
+    } });
+  });
+
+  await page.route("**/sessions/followup", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    return route.fulfill({ json: {
+      questions: [
+        { id: "scope", question: "How much depth do you want?", options: ["Foundation", "Advanced"], default: 0 },
+        { id: "pace", question: "What pace works for you?", options: ["Steady", "Intensive"], default: 0 },
+      ],
+      detected_domain: "programming",
+      detected_language: "python",
+      detected_specialization: null,
+    } });
   });
 
   // Registered last so it wins over the broader "**/sessions/*" list mock above (Playwright matches
   // routes in reverse registration order — last registered is tried first).
   await page.route("**/sessions/stream", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
     const frames = [
       { stage: "scout", label: "Scouting sources" },
       { stage: "academic", label: "Consulting academic agent" },
@@ -110,6 +143,12 @@ test("full loop: login → graph → lesson → grade → mastery", async ({ pag
   // server compiles that route on demand the first time any test reaches it — measured at ~12s cold
   // vs ~0.5s warm. The other tests enter via page.goto(), whose 30s navigation timeout absorbs that;
   // this one has to wait for the transition explicitly, or the 5s expect() default fires mid-compile.
+  await page.getByRole("heading", { name: "How much depth do you want?" }).waitFor();
+  await page.getByRole("button", { name: "Next →" }).click();
+  await page.getByRole("heading", { name: "What pace works for you?" }).waitFor();
+  await page.getByRole("button", { name: /Generate Path/ }).click();
+  await expect(page.getByRole("heading", { name: "Your Learning Path is Ready!" })).toBeVisible();
+  await page.getByRole("button", { name: /Explore Your Path/ }).click();
   await page.waitForURL("**/session/**");
   await expect(page.getByText("skills complete")).toBeVisible();
   await expect(page.getByText("/2")).toBeVisible();
@@ -125,8 +164,45 @@ test("full loop: login → graph → lesson → grade → mastery", async ({ pag
   await page.locator(".monaco-editor").first().click();
   await page.keyboard.type("def add(a,b): return a+b");
   await page.getByRole("button", { name: "Grade my submission" }).click();
-  await expect(page.getByText("100%")).toBeVisible();
+  await expect(page.getByText("100%", { exact: true })).toBeVisible();
   await expect(page.getByText("1/2")).toBeVisible();
+  await expect(page.getByText("All checks passed.")).toBeVisible();
+});
+
+for (const language of ["javascript", "sql"] as const) {
+  test(`${language} coding exercise opens the named editor and shows its grade result`, async ({ page }) => {
+    await mockApi(page, { language });
+    await openSession(page);
+    await page.getByText("Python Basics").first().click();
+    await expect(page.locator(".monaco-editor")).toBeVisible();
+    const languageIds = await page.evaluate(() => {
+      const monaco = (window as Window & {
+        monaco?: { editor?: { getModels: () => Array<{ getLanguageId: () => string }> } };
+      }).monaco;
+      return monaco?.editor?.getModels().map((model) => model.getLanguageId()) ?? [];
+    });
+    expect(languageIds).toContain(language);
+    await page.locator(".monaco-editor").first().click();
+    await page.keyboard.type(language === "sql" ? "SELECT 1;" : "function add(a,b) { return a+b; }");
+    await page.getByRole("button", { name: "Grade my submission" }).click();
+    await expect(page.getByText("All checks passed.")).toBeVisible();
+    await expect(page.getByText("100%", { exact: true })).toBeVisible();
+  });
+}
+
+test("grading harness failure is explained without showing a zero or changing mastery", async ({ page }) => {
+  await mockApi(page, { harnessError: true });
+  await openSession(page);
+  await page.getByText("Python Basics").first().click();
+  await page.locator(".monaco-editor").first().click();
+  await page.keyboard.type("def add(a,b): return a+b");
+  await page.getByRole("button", { name: "Grade my submission" }).click();
+  await expect(page.getByText("Not graded — the exercise's auto-grading tests are broken on our side.")).toBeVisible();
+  await expect(page.getByText(/Your submission was not scored and your progress is unchanged/)).toBeVisible();
+  await expect(page.getByText("ModuleNotFoundError: test fixture")).toBeVisible();
+  await expect(page.getByText("0%", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("skills complete")).toBeVisible();
+  await expect(page.getByText("0/2")).toBeVisible();
 });
 
 test("remedial node added mid-session gets the entrance animation, even under StrictMode double-render", async ({
@@ -155,7 +231,7 @@ test("remedial node added mid-session gets the entrance animation, even under St
   await page.locator(".monaco-editor").first().click();
   await page.keyboard.type("def add(a,b): return a+b");
   await page.getByRole("button", { name: "Grade my submission" }).click();
-  await expect(page.getByText("100%")).toBeVisible();
+  await expect(page.getByText("100%", { exact: true })).toBeVisible();
 
   // The new node gets the entrance class; the two nodes seen since first paint do not.
   await expect(page.locator(".surface.skill-node-enter", { hasText: "Remedial Topic" })).toHaveCount(1);
@@ -181,7 +257,7 @@ for (const key of ["Enter", "Space"]) {
     await mockApi(page);
     await openSession(page);
 
-    await page.getByRole("button", { name: /^Python Basics\. Available$/ }).focus();
+    await page.getByRole("button", { name: "Start Here. Python Basics. Available" }).focus();
     await page.keyboard.press(key);
 
     // Same observable outcome the mouse test asserts, so the two paths are proven equivalent.
@@ -220,6 +296,11 @@ test("locked node shows a lock message", async ({ page }) => {
   await page.getByLabel("What do you want to learn?").fill("Learn Python");
   await page.getByRole("button", { name: "Generate" }).click();
   // Same cold-compile wait as the full-loop test — see the comment there.
+  await page.getByRole("heading", { name: "How much depth do you want?" }).waitFor();
+  await page.getByRole("button", { name: "Next →" }).click();
+  await page.getByRole("button", { name: /Generate Path/ }).click();
+  await expect(page.getByRole("heading", { name: "Your Learning Path is Ready!" })).toBeVisible();
+  await page.getByRole("button", { name: /Explore Your Path/ }).click();
   await page.waitForURL("**/session/**");
   await expect(page.getByText("skills complete")).toBeVisible();
 

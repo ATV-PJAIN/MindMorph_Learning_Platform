@@ -26,7 +26,16 @@ python-multipart
 pgvector
 pytest
 pytest-asyncio
-
 # Graph Database
 neo4j>=5.0
 langchain-neo4j
+
+# Python exercise runtime: generated grading tests may import both libraries.
+numpy
+pandas
+
+# Kafka telemetry producer and event watcher.
+kafka-python
+
+# Local code knowledge graph (AST extraction; no API key).
+graphifyy==0.9.97

@@ -30,18 +30,25 @@ class PgRagStore:
         return self._embeddings
 
     def add_texts(self, texts: List[str], metadatas: Optional[List[dict]] = None) -> None:
-        texts = [t for t in texts if t and t.strip()]
+        if metadatas is not None and len(metadatas) != len(texts):
+            raise ValueError("Passage metadata count does not match text count")
+        pairs = [(t, m) for t, m in zip(texts, metadatas or [{} for _ in texts]) if t and t.strip()]
+        texts = [t for t, _ in pairs]
         if not texts:
             return
         from persistence.db import get_sessionmaker
         from persistence.models import RagChunkRow
 
         vectors = self._emb().embed_documents(texts)
-        metadatas = metadatas or [{} for _ in texts]
+        if len(vectors) != len(texts):
+            raise ValueError("Embedding count does not match passage count")
+        metadatas = [m for _, m in pairs]
         rows = [
             RagChunkRow(
                 user_id=self.user_id,
                 source=(m or {}).get("source", "upload"),
+                source_id=(m or {}).get("source_id"),
+                page=(m or {}).get("page"),
                 content=t,
                 embedding=v,
             )
@@ -50,7 +57,7 @@ class PgRagStore:
         with get_sessionmaker()() as session:
             session.add_all(rows)
             session.commit()
-        logger.info("RAG(pg): stored %d chunk(s) for user %s", len(rows), self.user_id)
+        logger.info("RAG(pg): stored %d chunk(s)", len(rows))
 
     @property
     def is_empty(self) -> bool:
@@ -67,26 +74,31 @@ class PgRagStore:
             ).scalar_one()
         return n == 0
 
-    def retrieve(self, query: str, k: int = DEFAULT_K) -> Optional[str]:
-        if not query or not query.strip():
-            return None
+    def search(self, query: str, k: int = DEFAULT_K, source_ids: Optional[list[str]] = None) -> list[dict]:
+        if not query.strip() or source_ids == []:
+            return []
         from sqlalchemy import select
 
         from persistence.db import get_sessionmaker
         from persistence.models import RagChunkRow
 
         qvec = self._emb().embed_query(query)
+        distance = RagChunkRow.embedding.cosine_distance(qvec)
+        statement = select(RagChunkRow, distance.label("distance")).where(RagChunkRow.user_id == self.user_id)
+        if source_ids is not None:
+            statement = statement.where(RagChunkRow.source_id.in_(source_ids))
+        with get_sessionmaker()() as session:
+            rows = session.execute(statement.order_by(distance).limit(min(max(k, 0), 20))).all()
+            return [{"id": f"p_{row.id}", "text": row.content, "source": row.source,
+                     "source_id": row.source_id, "page": row.page, "score": 1.0 - float(dist)}
+                    for row, dist in rows]
+
+    def retrieve(self, query: str, k: int = DEFAULT_K) -> Optional[str]:
         try:
-            with get_sessionmaker()() as session:
-                rows = session.execute(
-                    select(RagChunkRow.content, RagChunkRow.source)
-                    .where(RagChunkRow.user_id == self.user_id)
-                    .order_by(RagChunkRow.embedding.cosine_distance(qvec))
-                    .limit(k)
-                ).all()
+            rows = self.search(query, k)
         except Exception:
-            logger.exception("RAG(pg): retrieval failed for user %s", self.user_id)
+            logger.warning("RAG(pg): retrieval unavailable")
             return None
         if not rows:
             return None
-        return "\n".join(f"- {content}\n  Source: {source}" for content, source in rows)
+        return "\n".join(f"- {row['text']}\n  Source: {row['source']}" for row in rows)

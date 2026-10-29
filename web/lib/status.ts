@@ -94,8 +94,8 @@ export interface StatusStyle {
 
 export const STATUS_STYLE: Record<NodeStatus, StatusStyle> = {
   mastered: { label: "Complete", glyph: "✓", color: "var(--color-mastered)" },
-  // 40–79: passed the floor but not the 80 bar — explicitly NOT advancement (downstream stays locked).
-  in_progress: { label: "Keep practicing", glyph: "◐", color: "var(--color-progress)" },
+  // 40–79: passed the floor but not the 80 bar — in progress towards full mastery.
+  in_progress: { label: "In progress", glyph: "◐", color: "var(--color-progress)" },
   needs_review: { label: "Needs review", glyph: "↻", color: "var(--color-review)" },
   blocked: { label: "Locked", glyph: "🔒", color: "var(--color-blocked)" },
   available: { label: "Available", glyph: "○", color: "var(--color-available)" },

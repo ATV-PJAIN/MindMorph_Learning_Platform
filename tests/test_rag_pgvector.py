@@ -44,17 +44,12 @@ class _Fake384(Embeddings):
 
 def _pg_ready() -> bool:
     try:
-        from sqlalchemy import text
-        from persistence.db import get_engine
-
-        with get_engine().connect() as c:
-            c.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-            c.commit()
-        from persistence.db import create_all
-
-        create_all()  # ensure rag_chunks exists (idempotent)
+        from persistence.db import check_ready
+        check_ready()  # Migrations must actually have run; never create schema in a readiness test.
         return True
     except Exception:
+        if os.getenv("MINDMORPH_REQUIRE_DB_TESTS") == "1":
+            raise RuntimeError("Required migrated pgvector database is unavailable")
         return False
 
 

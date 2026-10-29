@@ -9,11 +9,11 @@ from typing import Union
 logger = logging.getLogger(__name__)
 
 
-def extract_text_from_pdf(data: Union[bytes, str]) -> str:
+def extract_pages_from_pdf(data: Union[bytes, str]) -> list[tuple[int, str]]:
     """Extract plain text from a PDF given raw ``bytes`` or a file path.
 
-    Returns the concatenated page text (blank line between pages). Raises ``ValueError`` if the PDF
-    can't be opened or yields no text, so callers can surface a clean error.
+    Returns (one-based page number, text) pairs, retaining empty page positions.
+    Raises ``ValueError`` if the PDF cannot be opened or has no extractable text.
     """
     import fitz  # lazy: PyMuPDF only when ingesting
 
@@ -26,11 +26,15 @@ def extract_text_from_pdf(data: Union[bytes, str]) -> str:
         raise ValueError(f"could not open PDF: {e}") from e
 
     try:
-        pages = [page.get_text("text").strip() for page in doc]
+        pages = [(index + 1, page.get_text("text").strip()) for index, page in enumerate(doc)]
     finally:
         doc.close()
 
-    text = "\n\n".join(p for p in pages if p)
-    if not text.strip():
+    if not any(text for _, text in pages):
         raise ValueError("PDF contained no extractable text (scanned image? needs OCR)")
-    return text
+    return pages
+
+
+def extract_text_from_pdf(data: Union[bytes, str]) -> str:
+    """Compatibility adapter; ingestion uses pages to preserve real page numbers."""
+    return "\n\n".join(text for _, text in extract_pages_from_pdf(data) if text)

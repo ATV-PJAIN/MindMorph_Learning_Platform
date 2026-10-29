@@ -1,0 +1,23 @@
+# Local state, secrets, dependencies, and generated output are not source code.
+.env
+*.env
+.env.*
+.git/
+.aws/
+.codex/
+.claude/settings.local.json
+.venv/
+logs/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+graphify-out/
+web/node_modules/
+web/.next*/
+web/out/
+web/playwright-report/
+web/test-results/
+*.pdf
+*.dump
+*.tsbuildinfo

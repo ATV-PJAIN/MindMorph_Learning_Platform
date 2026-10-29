@@ -1,5 +1,10 @@
 # How the Knowledge Graph Works in MindMorph
 
+> Historical design explanation. Current P1 #7 uses saved sessions as the authority and writes
+> session-owned Neo4j mirrors; fresh grounded paths bypass shared roadmap caches. Neo4j is not a
+> lesson/exercise bank. See [GROUNDING.md](GROUNDING.md) and
+> [NEO4J_ARCHITECTURE.md](NEO4J_ARCHITECTURE.md) for current behavior.
+
 > This document explains only the knowledge graph —
 > what it is, how it is built, how the rest of the app uses it,
 > and what changes if you move it into a dedicated graph database.

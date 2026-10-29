@@ -10,6 +10,7 @@ Cross-tenant access returns 403 Forbidden.
 Rate limits applied via slowapi annotations.
 """
 import json
+import asyncio
 import logging
 import os
 import secrets
@@ -24,6 +25,8 @@ from api.schemas import (
     ChatRequest,
     CreateSessionRequest,
     FlagRequest,
+    FollowUpRequest,
+    FollowUpResponse,
     GradeRequest,
     IngestResponse,
     SessionMeta,
@@ -31,15 +34,21 @@ from api.schemas import (
     StartSessionResponse,
 )
 from persistence.repository import get_default_repository
+from persistence.errors import StorageUnavailableError, SessionConflictError
 from services.events import STAGES, funnel_summary, record_event
+from services.generation_privacy import private_generation
+from rag.grounding import retrieve_evidence, validate_citations, CitationStream
 from services.learning_service import (
     LockedNodeError,
+    StaleExerciseError,
     astream_session,
     build_tutor_messages,
+    generate_followup,
     grade,
     grade_assessment,
     open_lesson,
     start_session,
+    tutor_retrieval_query,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,12 +58,12 @@ GEN_FAILED = "The learning service is busy or rate-limited. Please try again in 
 
 
 def _service_unavailable(what: str, exc: Exception) -> HTTPException:
-    logger.exception("api: %s failed", what)
+    logger.error("api: %s failed (%s)", what, type(exc).__name__)
     return HTTPException(status_code=503, detail=GEN_FAILED)
 
 
 def _get_authed_user_id(request: Request, fallback_user_id: str | None = None) -> str:
-    """Return authenticated user_id from middleware state, with optional fallback for legacy calls."""
+    """Return authenticated user_id from middleware state, with optional fallback for legacy/internal calls."""
     uid = getattr(request.state, "user_id", None)
     if uid:
         return uid
@@ -65,7 +74,6 @@ def _get_authed_user_id(request: Request, fallback_user_id: str | None = None) -
 
 def _load_or_404(repo, authed_user_id: str, session_id: str, target_user_id: str | None = None) -> dict:
     """Load session and verify multi-tenant ownership."""
-    # If target_user_id was passed in URL, enforce it matches authed_user_id
     if target_user_id and target_user_id != authed_user_id:
         raise HTTPException(
             status_code=403, detail="Forbidden: You do not have permission to access another user's session"
@@ -76,23 +84,47 @@ def _load_or_404(repo, authed_user_id: str, session_id: str, target_user_id: str
     return ls
 
 
+@router.post("/sessions/followup", response_model=FollowUpResponse)
+@limiter.limit("15/minute")
+def get_followup_questions(request: Request, req: FollowUpRequest) -> FollowUpResponse:
+    """Generate follow-up questions before creating a session."""
+    try:
+        result = generate_followup(req.query)
+        if not result:
+            raise ValueError("Failed to generate follow-up questions")
+    except Exception as e:
+        raise _service_unavailable("followup", e)
+    return FollowUpResponse(**result)
+
+
 @router.post("/sessions", response_model=StartSessionResponse)
 @limiter.limit("10/minute")
 def create_session(request: Request, req: CreateSessionRequest) -> StartSessionResponse:
     """Run orchestration for a query. Scoped strictly to the authenticated user."""
     authed_user_id = _get_authed_user_id(request, req.user_id)
+    extra = {"user_id": authed_user_id}
+    if req.preferences is not None:
+        extra["preferences"] = req.preferences
+    if req.primary_language is not None:
+        extra["primary_language"] = req.primary_language
+    if req.scope is not None:
+        extra["scope"] = req.scope
+    if req.domain is not None:
+        extra["domain"] = req.domain
+
     try:
-        result = start_session(req.query, req.format_type)
+        result = start_session(req.query, req.format_type, **extra)
     except Exception as e:
         raise _service_unavailable("start_session", e)
     resp = StartSessionResponse(
         route=result["route"],
         final_content=result.get("final_content"),
         exercise=result.get("exercise"),
+        grounding=result.get("grounding"),
     )
     ls = result.get("learning_session")
     if ls is not None:
-        session_id = uuid.uuid4().hex
+        session_id = ls.get("graph_identity") or uuid.uuid4().hex
         ls["session_id"] = session_id
         ls["user_id"] = authed_user_id
         get_default_repository().save(authed_user_id, session_id, ls, title=req.query)
@@ -107,9 +139,19 @@ async def create_session_stream(request: Request, req: CreateSessionRequest) -> 
     """Streaming twin of POST /sessions: SSE progress with verified user identity."""
     authed_user_id = _get_authed_user_id(request, req.user_id)
 
+    extra = {"user_id": authed_user_id}
+    if req.preferences is not None:
+        extra["preferences"] = req.preferences
+    if req.primary_language is not None:
+        extra["primary_language"] = req.primary_language
+    if req.scope is not None:
+        extra["scope"] = req.scope
+    if req.domain is not None:
+        extra["domain"] = req.domain
+
     async def gen():
         try:
-            async for evt in astream_session(req.query, req.format_type):
+            async for evt in astream_session(req.query, req.format_type, **extra):
                 if "result" not in evt:
                     yield _sse({"stage": evt["stage"], "label": evt["label"]})
                     continue
@@ -118,18 +160,21 @@ async def create_session_stream(request: Request, req: CreateSessionRequest) -> 
                     route=result["route"],
                     final_content=result.get("final_content"),
                     exercise=result.get("exercise"),
+                    grounding=result.get("grounding"),
                 )
                 ls = result.get("learning_session")
                 if ls is not None:
-                    session_id = uuid.uuid4().hex
+                    session_id = ls.get("graph_identity") or uuid.uuid4().hex
                     ls["session_id"] = session_id
                     ls["user_id"] = authed_user_id
                     get_default_repository().save(authed_user_id, session_id, ls, title=req.query)
                     resp.session_id = session_id
                     resp.learning_session = ls
                 yield _sse({"done": True, "session": resp.model_dump()})
+        except (StorageUnavailableError, SessionConflictError) as exc:
+            yield _sse({"error": str(exc)})
         except Exception:
-            logger.exception("api: create_session_stream failed")
+            logger.error("api: create_session_stream failed")
             yield _sse({"error": GEN_FAILED})
 
     return StreamingResponse(gen(), media_type="text/event-stream")
@@ -160,7 +205,10 @@ def open_node_lesson(request: Request, user_id: str, session_id: str, node_id: s
     try:
         ls = open_lesson(ls, node_id, user_id=authed_user_id)
     except LockedNodeError as e:
+        repo.save(authed_user_id, session_id, ls)
         raise HTTPException(status_code=409, detail={"error": "locked", "pending": e.pending})
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         record_event(ls, STAGES.COMPOSE_FAILURE, node_id=node_id, error=type(e).__name__, user_id=authed_user_id)
         repo.save(authed_user_id, session_id, ls)
@@ -185,7 +233,7 @@ async def ingest_material(request: Request, user_id: str, file: UploadFile = Fil
     from rag import registry
 
     try:
-        chunks = registry.ingest_pdf(authed_user_id, data, name)
+        chunks = await asyncio.to_thread(registry.ingest_pdf, authed_user_id, data, name)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -225,21 +273,43 @@ async def chat(request: Request, user_id: str, session_id: str, req: ChatRequest
     ls["chat"].append({"role": "user", "content": req.message})
     repo.save(authed_user_id, session_id, ls)
 
-    messages = build_tutor_messages(ls, req.node_id, req.message, authed_user_id)
+    evidence = await asyncio.to_thread(
+        retrieve_evidence,
+        tutor_retrieval_query(ls, req.node_id, req.message),
+        authed_user_id,
+        public_query=ls.get("public_query"),
+    )
+    messages = await asyncio.to_thread(
+        build_tutor_messages, ls, req.node_id, req.message, authed_user_id, evidence=evidence
+    )
     from services.learning_service import _get_tutor_agent
 
+    @private_generation
     async def gen():
         full = ""
+        citations = CitationStream(evidence)
         try:
             async for token in _get_tutor_agent().astream(messages):
                 full += token
-                yield _sse({"token": token})
+                ready = citations.push(token)
+                if ready:
+                    yield _sse({"token": ready})
+            tail = citations.push("", final=True)
+            if tail:
+                yield _sse({"token": tail})
         except Exception:
-            logger.exception("api: chat stream failed")
+            logger.error("api: chat stream failed")
             yield _sse({"error": GEN_FAILED})
             return
-        ls["chat"].append({"role": "assistant", "content": full})
-        repo.save(authed_user_id, session_id, ls)
+
+        full, final_evidence = validate_citations(full, evidence)
+        ls["chat"].append({"role": "assistant", "content": full, "grounding": final_evidence})
+        try:
+            repo.save(authed_user_id, session_id, ls)
+        except (StorageUnavailableError, SessionConflictError) as exc:
+            yield _sse({"error": str(exc)})
+            return
+        yield _sse({"grounding": final_evidence})
         yield _sse({"done": True})
 
     return StreamingResponse(gen(), media_type="text/event-stream")
@@ -256,7 +326,12 @@ def grade_node(
     new_node_ids: list[str] = []
     result: dict | None = None
     try:
-        ls, new_node_ids, result = grade(ls, node_id, req.solution)
+        extra = {"exercise_revision": req.exercise_revision} if req.exercise_revision is not None else {}
+        ls, new_node_ids, result = grade(ls, node_id, req.solution, **extra)
+    except LockedNodeError as e:
+        raise HTTPException(status_code=409, detail={"error": "locked", "pending": e.pending})
+    except StaleExerciseError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

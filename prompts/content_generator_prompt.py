@@ -10,6 +10,10 @@ STRICT RULES:
 - Do NOT output placeholders, filler text, or meta commentary.
 - Assume the learner is capable but may be unfamiliar with the topic.
 - Prefer clarity, correctness, and insight over brevity.
+- ADAPT to the domain: if the query is about programming, include code. If it is
+  about music, business, cooking, math, or any other non-coding domain, use
+  appropriate examples (notation, formulas, case studies, step-by-step procedures,
+  diagrams, etc.) instead of code.
 """
 
 PROMPT_BOOST = BASE_INSTRUCTIONS + """
@@ -31,9 +35,10 @@ CONTENT REQUIREMENTS:
 3. Visual Mental Model
    - One sentence describing how to mentally picture the concept.
 
-4. Code Snippet
-   - ONE copy-pasteable example.
-   - Minimal but meaningful comments.
+4. Practical Demonstration
+   - For coding topics: ONE copy-pasteable code example with minimal but meaningful comments.
+   - For non-coding topics: ONE concrete worked example, step-by-step procedure,
+     formula application, or practical demonstration relevant to the domain.
    - Show the most common or practical use case.
 
 5. Key Takeaway
@@ -67,9 +72,9 @@ CONTENT REQUIREMENTS:
      - OR a simple Mermaid diagram (`mermaid` block)
    - Briefly explain the visual.
 
-4. Code Examples
-   - Basic Example: Demonstrates syntax or core behavior.
-   - Practical Example: Shows real-world usage.
+4. Worked Examples
+   - Basic Example: Demonstrates core behavior or syntax (code for programming, notation/formulas/steps for other domains).
+   - Practical Example: Shows real-world usage or application.
    - Walkthrough: Short explanation of logic and flow.
 
 5. Best Practices
@@ -110,12 +115,14 @@ CONTENT REQUIREMENTS:
    - A detailed text-based system visualization.
    - Explicitly explain components and relationships.
 
-4. Codex (Extensive Code Examples)
-   - Foundational Example: Establish core usage.
-   - Advanced Example: Production-grade patterns
-     (e.g., error handling, optimization, scalability).
+4. Detailed Worked Examples
+   - Foundational Example: Establish core usage (code for programming, detailed
+     procedures/formulas/case studies for other domains).
+   - Advanced Example: Professional-grade patterns
+     (e.g., error handling and optimization for code; advanced techniques,
+     real-world case studies, or expert-level analysis for other domains).
    - Each example must include:
-     - Heavily commented code
+     - Detailed annotations or heavily commented code
      - A step-by-step walkthrough
 
 5. Expert Summary

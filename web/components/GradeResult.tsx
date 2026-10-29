@@ -2,6 +2,9 @@
 
 import type { GradeResult as GradeResultT } from "@/lib/types";
 
+// Mastery threshold must match services/mastery.py MASTERY_THRESHOLD
+const MASTERY_THRESHOLD = 80;
+
 // Renders a persisted grade result (node_state.last_feedback), mirroring the Streamlit grade panel.
 export function GradeResult({ result }: { result: GradeResultT }) {
   // The generated tests were broken, so nothing was measured. Say that plainly — showing 0% here
@@ -13,8 +16,8 @@ export function GradeResult({ result }: { result: GradeResultT }) {
           Not graded — the exercise&apos;s auto-grading tests are broken on our side.
         </p>
         <p className="mt-2 text-sm text-text-muted">
-          Your submission was not scored and your progress is unchanged. Reopen the lesson to get a
-          fresh exercise.
+          Your submission was not scored and your progress is unchanged. The exercise&apos;s tests
+          need to be repaired before this submission can be graded.
         </p>
         {(result.failures ?? []).map((f, i) => (
           <pre key={i} className="mt-2 overflow-x-auto rounded-lg bg-ink-900 p-3 text-xs text-text-muted">
@@ -29,6 +32,7 @@ export function GradeResult({ result }: { result: GradeResultT }) {
   const isCoding = result.passed != null && result.total != null;
   const passed = isCoding && result.passed === result.total && (result.total ?? 0) > 0;
   const tone = passed || score >= 80 ? "var(--color-mastered)" : score >= 50 ? "var(--color-progress)" : "var(--color-review)";
+  const needsPractice = !result.harness_error && score < MASTERY_THRESHOLD;
 
   return (
     <div className="mt-5 rounded-xl border border-white/10 bg-ink-850 p-4">
@@ -42,6 +46,27 @@ export function GradeResult({ result }: { result: GradeResultT }) {
           </span>
         )}
       </div>
+
+      {/* Task 3: Bold inline banner for below-mastery scores — immediately visible, no scroll jank.
+          The banner explains WHY the learner can't advance and WHAT to do next. */}
+      {needsPractice && (
+        <div
+          className="mt-4 rounded-lg border px-4 py-3"
+          style={{
+            borderColor: tone,
+            background: score >= 50
+              ? "oklch(80% 0.12 85 / 0.08)"   /* warm amber tint for 50–79% */
+              : "oklch(65% 0.20 25 / 0.08)",   /* red tint for below 50% */
+          }}
+        >
+          <p className="text-sm font-semibold" style={{ color: tone }}>
+            🔄 Keep practicing to unlock the next lesson!
+          </p>
+          <p className="mt-1 text-xs text-text-muted">
+            You need {MASTERY_THRESHOLD}% to master this skill. Review the feedback below and try again.
+          </p>
+        </div>
+      )}
 
       {result.timed_out && (
         <p className="mt-2 text-sm" style={{ color: "var(--color-progress)" }}>

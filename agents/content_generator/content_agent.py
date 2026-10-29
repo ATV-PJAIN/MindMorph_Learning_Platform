@@ -37,6 +37,7 @@ class ContentAgent:
         format_type: str = "C",
         remediation: Optional[str] = None,
         context: Optional[str] = None,
+        primary_language: Optional[str] = None,
     ) -> str:
         """
         Generates content based on the selected format.
@@ -45,6 +46,7 @@ class ContentAgent:
                      When None (the default), behavior is identical to a plain generation.
         context: optional learning-path goal. Keeps a prerequisite lesson in the path's language/tools
                  (e.g. teach "Programming Fundamentals" in JavaScript for a MERN path, not Python).
+        primary_language: explicitly requested programming language for code snippets.
         """
         if not user_query or not isinstance(user_query, str):
             raise ValueError("User query must be a non-empty string")
@@ -56,6 +58,12 @@ class ContentAgent:
 
         # Select prompt
         system_prompt = CONTENT_PROMPTS.get(format_type.upper(), CONTENT_PROMPTS["C"])
+
+        if primary_language:
+            system_prompt = (
+                f"{system_prompt}\n\n"
+                f"IMPORTANT: All code examples MUST be in {primary_language}. Do not use any other language for code snippets."
+            )
 
         # Keep a prerequisite lesson consistent with the overall path: same language(s), tools, frameworks.
         # Without this, a generic node like "Programming Fundamentals" defaults to Python even on a

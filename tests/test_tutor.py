@@ -40,6 +40,9 @@ class _FakeStore:
     def retrieve(self, q, k=4):
         return "RETRIEVED_CTX"
 
+    def search(self, q, k=4, source_ids=None):
+        return [{"id": "test", "text": "RETRIEVED_CTX", "source": "notes.pdf", "score": 0.9}]
+
 
 def test_build_tutor_messages_pulls_lesson_and_rag(monkeypatch):
     monkeypatch.setattr("rag.registry.get_user_store", lambda uid: _FakeStore())

@@ -86,7 +86,7 @@ async def test_scout_route_runs_full_learning_plan(monkeypatch):
     assert consensus.build_skill_graph.call_count == 1
     # Consensus saw all three perspectives.
     consensus.build_skill_graph.assert_called_once_with(
-        "learn ML", "ACADEMIC_RESULT", "JOB_SUMMARY", "PRACTICAL_RESULT"
+        "learn ML", "ACADEMIC_RESULT", "JOB_SUMMARY", "PRACTICAL_RESULT", scope_instruction=""
     )
     # Reviewer runs after consensus, exactly once.
     assert reviewer.review_skill_graph.call_count == 1
@@ -123,7 +123,7 @@ async def test_content_route_runs_dual_path(monkeypatch):
     assert state["creative_draft"] == "CREATIVE_DRAFT"
     assert state["factual_findings"] == "FACTUAL_FINDINGS"
     assert state["final_content"] == "FINAL_LESSON"
-    content.generate_content.assert_called_once_with("Python lists", "B", remediation=None, context=None)
+    content.generate_content.assert_called_once_with("Python lists", "B", remediation=None, context=None, primary_language=None)
     synthesizer.synthesize.assert_called_once_with("Python lists", "CREATIVE_DRAFT", "FACTUAL_FINDINGS")
 
 
@@ -140,7 +140,7 @@ async def test_exercise_route_runs_exercise_subgraph(monkeypatch):
     consensus = MagicMock()
 
     format_selector = MagicMock()
-    format_selector.select_format.return_value = MagicMock(format="coding_challenge", reasoning="r")
+    format_selector.select_format.return_value = MagicMock(format="coding_challenge", reasoning="r", language="python")
     exercise_synthesizer = MagicMock()
     exercise_synthesizer.synthesize.return_value = "EXERCISE_STATEMENT"
     grader = MagicMock()
@@ -212,8 +212,8 @@ async def test_astream_session_emits_stage_per_node_in_graph_order(monkeypatch):
     # fan in to consensus.
     assert stages[0] == "orchestrator"
     assert stages[1] == "scout"
-    assert set(stages[2:5]) == {"academic", "market", "practical"}
-    assert stages[5:] == ["consensus", "reviewer"]
+    assert set(stages[2:6]) == {"academic", "market", "practical", "knowledge"}
+    assert stages[6:] == ["consensus", "reviewer"]
     assert all(e["label"] for e in stage_events)  # every stage carries a human-readable label
 
     terminal = events[-1]

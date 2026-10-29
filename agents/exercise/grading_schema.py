@@ -1,8 +1,8 @@
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
-from agents.exercise.exercise_schema import ExerciseFormatType
+from agents.exercise.exercise_schema import CodingLanguageType, ExerciseFormatType
 
 
 class RubricCriterion(BaseModel):
@@ -20,11 +20,28 @@ class GradingArtifact(BaseModel):
     """
 
     format: ExerciseFormatType = Field(description="Which exercise format this artifact grades")
+    language: Optional[CodingLanguageType] = Field(
+        default=None,
+        description=(
+            "The coding language for a coding_challenge: 'python', 'javascript', or 'sql'. "
+            "Determines which execution harness runs the tests."
+        ),
+    )
     unit_tests: List[str] = Field(
         default_factory=list,
         description=(
-            "pytest-style test snippets that import the user's solution (module `solution`). "
-            "Populated for coding_challenge; empty for case_study."
+            "Test snippets that import the user's solution module. "
+            "For Python: pytest-style (import from `solution`). "
+            "For JavaScript: node:test + node:assert (require('./solution')). "
+            "Populated for coding_challenge (python/javascript); empty for case_study and sql."
+        ),
+    )
+    sql_assertions: List[str] = Field(
+        default_factory=list,
+        description=(
+            "JSON-encoded test assertions for SQL exercises. Each element is a JSON object string "
+            "with keys: query (SELECT to run), expected (list of expected row tuples), label (test name). "
+            "Populated for coding_challenge (sql); empty otherwise."
         ),
     )
     rubric: List[RubricCriterion] = Field(

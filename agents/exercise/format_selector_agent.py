@@ -22,20 +22,25 @@ from agents.exercise.exercise_schema import ExerciseFormat
 
 _SYSTEM_PROMPT = """You are the Format Selector for the MindMorph learning platform.
 
-IMPORTANT: the auto-grader executes **Python only**. A 'coding_challenge' is graded by running a Python
-`solution` module against unit tests — appropriate ONLY when the skill is genuinely practiced by writing
-standalone Python.
+The auto-grader supports three coding languages. Choose the single best exercise format:
 
-Choose the single best exercise format:
-- 'coding_challenge' — ONLY for skills practiced by writing runnable **Python** (functions, algorithms,
-  data structures, Python scripts).
-- 'case_study' — everything else: web/front-end or JavaScript/TypeScript skills (HTML, CSS, React,
-  Node.js, Express, …), any non-Python language, databases/SQL, and conceptual/analytical/design topics.
-  Practiced by reasoning about a realistic scenario in prose (rubric-graded), not by writing Python.
+- 'coding_challenge' with language 'python' — for skills practiced by writing runnable Python
+  (functions, algorithms, data structures, data science with pandas/numpy, Python scripts).
+- 'coding_challenge' with language 'javascript' — for skills practiced by writing JavaScript or
+  TypeScript: Node.js, Express, React component logic, DOM manipulation, web APIs, functional
+  programming in JS, ES6+ features, async/await patterns. The grader runs Node.js with
+  node:test + node:assert (no browser, no npm packages).
+- 'coding_challenge' with language 'sql' — for skills practiced by writing SQL: database queries,
+  schema design, joins, aggregations, subqueries, window functions. The grader runs SQLite.
+- 'case_study' — for conceptual, analytical, practical, or design topics that cannot be expressed as runnable
+  code in Python/JS/SQL (e.g. system design, architecture, finance, business modeling, music theory,
+  marketing, science, writing, strategy). Practiced by reasoning about a realistic scenario, problem,
+  or workflow in prose (rubric-graded).
 
-When unsure, prefer 'case_study' — a Python exercise for a non-Python skill is wrong and confusing.
+When the skill clearly maps to one of the coding languages (Python, JavaScript, SQL), ALWAYS prefer 'coding_challenge'.
+For any non-programming domains or topics that do not involve writing runnable Python/JS/SQL, choose 'case_study'.
 
-Return the format and one sentence of reasoning."""
+Return the format, the language (if coding_challenge, else null), and one sentence of reasoning."""
 
 _HUMAN_TEMPLATE = "Learner request: {user_query}\n\nChoose the exercise format."
 
@@ -59,7 +64,8 @@ class FormatSelectorAgent:
         try:
             result = self.structured_llm.invoke(self.chat_prompt.format_messages(user_query=user_query))
             if result is not None:
-                logger.info("FormatSelector: chose %s", getattr(result, "format", None))
+                logger.info("FormatSelector: chose %s (language=%s)",
+                            getattr(result, "format", None), getattr(result, "language", None))
             return result
         except Exception:
             logger.exception("FormatSelector: error selecting exercise format")

@@ -3,7 +3,8 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "@/lib/api";
-import type { ChatMessage } from "@/lib/types";
+import type { ChatMessage, GroundingInfo } from "@/lib/types";
+import { EvidenceSources, citedText } from "./EvidenceSources";
 
 interface TutorChatProps {
   userId: string;
@@ -46,10 +47,13 @@ export function TutorChat({
     setBusy(true);
     setAnnouncement("Tutor is responding…");
 
+    try {
     await api.streamChat(userId, sessionId, nodeId, message, {
       onToken: (t) => setStreaming((s) => s + t),
       onError: (m) => {
         setError(m);
+        setInput(message);
+        qc.invalidateQueries({ queryKey: sessionKey });
         setAnnouncement("");
         setBusy(false);
         setPendingUser(null);
@@ -66,6 +70,15 @@ export function TutorChat({
         qc.invalidateQueries({ queryKey: sessionKey }); // persisted history is authoritative
       },
     });
+    } catch {
+      setError("The connection was interrupted. Your question is kept below; check saved history before retrying.");
+      setInput(message);
+      setBusy(false);
+      setPendingUser(null);
+      setStreaming("");
+      setAnnouncement("");
+      qc.invalidateQueries({ queryKey: sessionKey });
+    }
   };
 
   if (!open) {
@@ -119,7 +132,7 @@ export function TutorChat({
           <p className="text-sm text-text-muted">Ask anything about this lesson.</p>
         )}
         {bubbles.map((m, i) => (
-          <Bubble key={i} role={m.role} content={m.content} />
+          <Bubble key={i} role={m.role} content={m.content} grounding={m.grounding} />
         ))}
         {streaming && <Bubble role="assistant" content={streaming} />}
         {busy && !streaming && <p className="text-sm text-text-muted">Thinking…</p>}
@@ -159,7 +172,7 @@ export function TutorChat({
   );
 }
 
-function Bubble({ role, content }: { role: "user" | "assistant"; content: string }) {
+function Bubble({ role, content, grounding }: { role: "user" | "assistant"; content: string; grounding?: GroundingInfo | null }) {
   const isUser = role === "user";
   return (
     <div className={isUser ? "flex justify-end" : "flex justify-start"}>
@@ -171,7 +184,8 @@ function Bubble({ role, content }: { role: "user" | "assistant"; content: string
           border: isUser ? "none" : "1px solid rgba(255,255,255,0.1)",
         }}
       >
-        {content}
+        <p>{isUser ? content : citedText(content, grounding)}</p>
+        {!isUser && grounding && <EvidenceSources evidence={grounding} />}
       </div>
     </div>
   );
